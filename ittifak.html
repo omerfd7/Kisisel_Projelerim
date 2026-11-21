@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Neon İttifakı — 2 Kişilik Arena Dövüşü</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: #070913;
+      color: #e2e8f0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .hud {
+      width: 100%;
+      max-width: 1000px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 18px;
+      margin-bottom: 6px;
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid #1e293b;
+      border-radius: 10px;
+    }
+    .player-hud {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-weight: 700;
+    }
+    .p1-c { color: #38bdf8; text-shadow: 0 0 10px rgba(56, 189, 248, 0.45); }
+    .p2-c { color: #fb923c; text-shadow: 0 0 10px rgba(251, 146, 60, 0.45); text-align: right; }
+    .hearts { font-size: 1.05rem; letter-spacing: 2px; }
+    .center-hud { text-align: center; }
+    .wave-title { font-size: 1.25rem; font-weight: 800; color: #f8fafc; letter-spacing: 1.5px; }
+    .combo-sub { font-size: 0.8rem; color: #facc15; font-weight: 700; margin-top: 2px; }
+    canvas {
+      background: #0b0f1e;
+      border: 2px solid #334155;
+      border-radius: 12px;
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.85), inset 0 0 40px rgba(30, 41, 59, 0.4);
+      max-width: 98vw;
+      max-height: 82vh;
+      aspect-ratio: 1000 / 620;
+      display: block;
+    }
+    .footer-hint {
+      margin-top: 8px;
+      font-size: 0.8rem;
+      color: #64748b;
+      text-align: center;
+    }
+    kbd {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: #cbd5e1;
+      font-family: monospace;
+      font-size: 0.85em;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="hud">
+    <div class="player-hud p1-c">
+      <span>P1: SİBER PENÇE [WASD + SPACE]</span>
+      <span id="p1-hp" class="hearts">♥♥♥♥</span>
+    </div>
+    <div class="center-hud">
+      <div class="wave-title" id="wave-info">DALGA 1 • SKOR: 0</div>
+      <div class="combo-sub" id="combo-info">EN YÜKSEK SKOR: 0</div>
+    </div>
+    <div class="player-hud p2-c">
+      <span>[OKLAR + ENTER / SAĞ SHIFT] AĞIR TİTAN :P2</span>
+      <span id="p2-hp" class="hearts">♥♥♥♥♥♥</span>
+    </div>
+  </div>
+
+  <canvas id="game" width="1000" height="620"></canvas>
+
+  <div class="footer-hint">
+    P1: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Hareket + <kbd>SPACE</kbd> / <kbd>F</kbd> Seri Pençe (3. vuruş stunlar) &nbsp;|&nbsp;
+    P2: <kbd>Oklar</kbd> Hareket + <kbd>ENTER</kbd> / <kbd>Sağ Shift</kbd> Ağır Şok (Kalkan kırar & fırlatır)
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+
+  const p1HpEl = document.getElementById('p1-hp');
+  const p2HpEl = document.getElementById('p2-hp');
+  const waveInfoEl = document.getElementById('wave-info');
+  const comboInfoEl = document.getElementById('combo-info');
+
+  // --- SES MOTORU (Web Audio API) ---
+  let audioCtx = null;
+  function initAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  }
+
+  function playSound(type) {
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    if (type === 'slash') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(580, now);
+      osc.frequency.exponentialRampToValueAtTime(160, now + 0.09);
+      gain.gain.setValueAtTime(0.13, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      osc.start(now); osc.stop(now + 0.11);
+    } else if (type === 'slam') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(170, now);
+      osc.frequency.exponentialRampToValueAtTime(38, now + 0.22);
+      gain.gain.setValueAtTime(0.22, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.23);
+      osc.start(now); osc.stop(now + 0.24);
+    } else if (type === 'hit') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(240, now);
+      osc.frequency.exponentialRampToValueAtTime(75, now + 0.08);
+      gain.gain.setValueAtTime(0.14, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+      osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'shieldBreak') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(840, now);
+      osc.frequency.exponentialRampToValueAtTime(120, now + 0.18);
+      gain.gain.setValueAtTime(0.18, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.19);
+      osc.start(now); osc.stop(now + 0.2);
+    } else if (type === 'parry') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(920, now);
+      osc.frequency.exponentialRampToValueAtTime(1480, now + 0.11);
+      gain.gain.setValueAtTime(0.16, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+      osc.start(now); osc.stop(now + 0.13);
+    } else if (type === 'explode') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(130, now);
+      osc.frequency.exponentialRampToValueAtTime(28, now + 0.32);
+      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+      osc.start(now); osc.stop(now + 0.35);
+    } else if (type === 'heal') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.exponentialRampToValueAtTime(880, now + 0.18);
+      gain.gain.setValueAtTime(0.14, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+      osc.start(now); osc.stop(now + 0.21);
+    } else if (type === 'wave') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(380, now);
+      osc.frequency.setValueAtTime(520, now + 0.08);
+      osc.frequency.setValueAtTime(760, now + 0.16);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
+      osc.start(now); osc.stop(now + 0.35);
+    }
+  }
+
+  // --- KLAVYE ---
+  const keys = {};
+  const blocked = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
+
+  window.addEventListener('keydown', (e) => {
+    if (blocked.includes(e.code)) e.preventDefault();
+    initAudio();
+    if (!keys[e.code]) {
+      keys[e.code] = true;
+      onKeyDownOnce(e.code);
+    }
+  });
+  window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+  // --- OYUN DEĞİŞKENLERİ ---
+  const STORAGE_KEY = 'neon_ittifaki_highscore';
+  let highScore = Number(localStorage.getItem(STORAGE_KEY) || 0);
+
+  let state = 'MENU'; // MENU, PLAYING, GAME_OVER
+  let gameOverGrace = 0;
+  let score = 0;
+  let wave = 1;
+  let wavePauseTimer = 0;
+  let enemiesToSpawn = [];
+  let spawnTimer = 0;
+
+  let combo = 0;
+  let comboTimer = 0;
+  let screenShake = 0;
+  let hitStop = 0;
+
+  let players = [];
+  let enemies = [];
+  let projectiles = [];
+  let particles = [];
+  let slashes = [];
+  let pickups = [];
+  let floatTexts = [];
+  let wallFlashes = { top: 0, bottom: 0, left: 0, right: 0 };
+
+  function createPlayers() {
+    return [
+      {
+        id: 1,
+        name: 'SİBER PENÇE',
+        x: W * 0.36, y: H * 0.5,
+        vx: 0, vy: 0,
+        radius: 17,
+        speed: 285,
+        hp: 4, maxHp: 4,
+        angle: 0,
+        color: '#38bdf8',
+        glow: 'rgba(56, 189, 248, 0.75)',
+        cooldown: 0,
+        comboStep: 0,
+        comboReset: 0,
+        lungeTimer: 0,
+        invuln: 0,
+        downed: false,
+        reviveProgress: 0,
+        trail: []
+      },
+      {
+        id: 2,
+        name: 'AĞIR TİTAN',
+        x: W * 0.64, y: H * 0.5,
+        vx: 0, vy: 0,
+        radius: 21,
+        speed: 225,
+        hp: 6, maxHp: 6,
+        angle: Math.PI,
+        color: '#fb923c',
+        glow: 'rgba(251, 146, 60, 0.75)',
+        cooldown: 0,
+        lungeTimer: 0,
+        invuln: 0,
+        downed: false,
+        reviveProgress: 0,
+        trail: []
+      }
+    ];
+  }
+
+  function startGame() {
+    score = 0;
+    wave = 1;
+    combo = 0;
+    comboTimer = 0;
+    players = createPlayers();
+    enemies = [];
+    projectiles = [];
+    particles = [];
+    slashes = [];
+    pickups = [];
+    floatTexts = [];
+    setupWave(1);
+    state = 'PLAYING';
+    updateHUD();
+  }
+
+  function setupWave(w) {
+    enemiesToSpawn = [];
+    const count = 5 + w * 3;
+    for (let i = 0; i < count; i++) {
+      let type = 'chaser';
+      const r = Math.random();
+      if (w >= 2 && r < 0.24) type = 'shield';
+      else if (w >= 2 && r < 0.44) type = 'shooter';
+      else if (w >= 3 && r < 0.60) type = 'bomber';
+      enemiesToSpawn.push(type);
+    }
+    if (w % 4 === 0) enemiesToSpawn.push('boss');
+    spawnTimer = 0.4;
+    addFloatText(W / 2, H * 0.25, `DALGA ${w} BAŞLADI!`, '#facc15', 24);
+    playSound('wave');
+  }
+
+  function spawnEnemy(type) {
+    const side = Math.floor(Math.random() * 4);
+    let x = 0, y = 0;
+    if (side === 0) { x = Math.random() * W; y = -25; }
+    if (side === 1) { x = W + 25; y = Math.random() * H; }
+    if (side === 2) { x = Math.random() * W; y = H + 25; }
+    if (side === 3) { x = -25; y = Math.random() * H; }
+
+    const base = {
+      x, y, vx: 0, vy: 0,
+      knockVx: 0, knockVy: 0,
+      stun: 0,
+      hitFlash: 0,
+      lastHitBy: 0,
+      lastHitTimer: 0,
+      flying: false,
+      type
+    };
+
+    if (type === 'chaser') {
+      enemies.push({ ...base, r: 15, hp: 3, maxHp: 3, speed: 135 + wave * 4, color: '#f43f5e', shield: false, score: 15 });
+    } else if (type === 'shield') {
+      enemies.push({ ...base, r: 20, hp: 4, maxHp: 4, speed: 95 + wave * 3, color: '#a855f7', shield: true, score: 30 });
+    } else if (type === 'shooter') {
+      enemies.push({ ...base, r: 16, hp: 3, maxHp: 3, speed: 85, color: '#ec4899', shield: false, shootCd: 1.5 + Math.random(), score: 25 });
+    } else if (type === 'bomber') {
+      enemies.push({ ...base, r: 17, hp: 2, maxHp: 2, speed: 155 + wave * 3, color: '#facc15', shield: false, fuse: -1, score: 25 });
+    } else if (type === 'boss') {
+      enemies.push({ ...base, r: 36, hp: 24 + wave * 3, maxHp: 24 + wave * 3, speed: 75, color: '#ef4444', shield: true, shootCd: 2.0, score: 200 });
+    }
+  }
+
+  function updateHUD() {
+    const p1 = players[0], p2 = players[1];
+    p1HpEl.textContent = p1.downed ? 'KURTARILMAYI BEKLİYOR!' : '♥'.repeat(p1.hp) + '♡'.repeat(p1.maxHp - p1.hp);
+    p2HpEl.textContent = p2.downed ? 'KURTARILMAYI BEKLİYOR!' : '♥'.repeat(p2.hp) + '♡'.repeat(p2.maxHp - p2.hp);
+    waveInfoEl.textContent = `DALGA ${wave}  •  SKOR: ${score}`;
+    comboInfoEl.textContent = combo > 1 ? `🔥 TAKIM KOMBOSU: ${combo}x!` : `EN YÜKSEK SKOR: ${highScore}`;
+  }
+
+  function addFloatText(x, y, text, color = '#ffffff', size = 14) {
+    floatTexts.push({ x, y, text, color, size, life: 0.75, maxLife: 0.75 });
+  }
+
+  function spawnParticles(x, y, color, count = 14, speed = 220, size = 3) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const spd = (0.25 + Math.random() * 0.75) * speed;
+      particles.push({
+        x, y,
+        vx: Math.cos(a) * spd,
+        vy: Math.sin(a) * spd,
+        life: 0.25 + Math.random() * 0.3,
+        maxLife: 0.55,
+        color,
+        size: size * (0.6 + Math.random() * 0.7)
+      });
+    }
+  }
+
+  function onKeyDownOnce(code) {
+    if (state === 'MENU') {
+      if (code === 'Space' || code === 'Enter') startGame();
+      return;
+    }
+    if (state === 'GAME_OVER') {
+      if (gameOverGrace <= 0 && (code === 'Space' || code === 'Enter')) startGame();
+      return;
+    }
+
+    if (state !== 'PLAYING') return;
+
+    // P1 Saldırı
+    if (code === 'Space' || code === 'KeyF') {
+      triggerAttack(players[0]);
+    }
+    // P2 Saldırı
+    if (code === 'Enter' || code === 'ShiftRight' || code === 'NumpadEnter' || code === 'Slash' || code === 'Numpad0') {
+      triggerAttack(players[1]);
+    }
+  }
+
+  function damageEnemy(e, dmg, knockX, knockY, attackerId, isHeavy) {
+    // Kalkan kontrolü
+    if (e.shield) {
+      if (isHeavy) {
+        e.shield = false;
+        playSound('shieldBreak');
+        addFloatText(e.x, e.y - 24, 'KALKAN KIRILDI!', '#c084fc', 14);
+        spawnParticles(e.x, e.y, '#c084fc', 20, 260, 3.5);
+        screenShake = Math.max(screenShake, 8);
+      } else {
+        // Hafif saldırı arkadan veya stunlıysa işler, değilse seker
+        dmg = Math.max(0, dmg - 1);
+        if (dmg === 0) {
+          addFloatText(e.x, e.y - 20, 'ZIRHLI! (P2 ile kır)', '#c084fc', 12);
+          spawnParticles(e.x, e.y, '#c084fc', 6, 120, 2);
+          e.knockVx += knockX * 0.35;
+          e.knockVy += knockY * 0.35;
+          return;
+        }
+      }
+    }
+
+    // Takım Kombosu kontrolü!
+    let teamBonus = 0;
+    if (e.lastHitBy !== 0 && e.lastHitBy !== attackerId && e.lastHitTimer > 0) {
+      teamBonus = 1;
+      addFloatText(e.x, e.y - 34, 'TAKIM KOMBOSU! +1', '#facc15', 14);
+      spawnParticles(e.x, e.y, '#facc15', 12, 220, 3);
+    }
+    e.lastHitBy = attackerId;
+    e.lastHitTimer = 1.6;
+
+    e.hp -= (dmg + teamBonus);
+    e.hitFlash = 0.14;
+    e.knockVx += knockX;
+    e.knockVy += knockY;
+    if (isHeavy || Math.hypot(knockX, knockY) > 360) e.flying = true;
+
+    combo++;
+    comboTimer = 2.6;
+    updateHUD();
+
+    if (e.hp <= 0) {
+      killEnemy(e);
+    } else {
+      playSound('hit');
+    }
+  }
+
+  function killEnemy(e) {
+    const idx = enemies.indexOf(e);
+    if (idx === -1) return;
+    enemies.splice(idx, 1);
+
+    const mult = Math.min(5, 1 + Math.floor(combo / 5));
+    score += e.score * mult;
+    if (score > highScore) {
+      highScore = score;
+      localStorage.setItem(STORAGE_KEY, String(highScore));
+    }
+
+    spawnParticles(e.x, e.y, e.color, e.type === 'boss' ? 50 : 22, 280, 3.5);
+    playSound(e.type === 'boss' || e.type === 'bomber' ? 'explode' : 'hit');
+    screenShake = Math.max(screenShake, e.type === 'boss' ? 16 : 6);
+
+    // Bombacı ölürken etrafı yakar!
+    if (e.type === 'bomber') {
+      slashes.push({ type: 'ring', x: e.x, y: e.y, r: 90, color: '#facc15', life: 0.22, maxLife: 0.22 });
+      for (const other of [...enemies]) {
+        if (Math.hypot(other.x - e.x, other.y - e.y) < 95) {
+          other.hp -= 3;
+          other.hitFlash = 0.15;
+          if (other.hp <= 0) killEnemy(other);
+        }
+      }
+    }
+
+    // Can küresi düşürme şansı
+    if (e.type === 'boss' || Math.random() < 0.11) {
+      pickups.push({ x: e.x, y: e.y, r: 10, pulse: 0 });
+    }
+    updateHUD();
+  }
+
+  function triggerAttack(p) {
+    if (p.downed || p.cooldown > 0) return;
+
+    if (p.id === 1) {
+      // P1: Seri Pençe & 3. Vuruşta Stun Şoku
+      p.comboStep = (p.comboStep % 3) + 1;
+      p.comboReset = 0.75;
+      p.cooldown = p.comboStep === 3 ? 0.34 : 0.19;
+      p.lungeTimer = 0.1;
+      p.vx = Math.cos(p.angle) * 340;
+      p.vy = Math.sin(p.angle) * 340;
+
+      const isFinisher = p.comboStep === 3;
+      const range = isFinisher ? 92 : 74;
+      const dmg = isFinisher ? 2 : 1;
+
+      slashes.push({
+        type: 'arc',
+        x: p.x, y: p.y,
+        angle: p.angle,
+        r: range,
+        color: isFinisher ? '#ffffff' : p.color,
+        life: 0.16, maxLife: 0.16
+      });
+      playSound('slash');
+
+      // Mermi sektirme (Parry)
+      for (const pr of projectiles) {
+        if (pr.friendly) continue;
+        const dx = pr.x - p.x, dy = pr.y - p.y;
+        if (Math.hypot(dx, dy) < range + pr.r) {
+          pr.friendly = true;
+          pr.vx = Math.cos(p.angle) * 520;
+          pr.vy = Math.sin(p.angle) * 520;
+          pr.color = '#38bdf8';
+          playSound('parry');
+          addFloatText(pr.x, pr.y - 12, 'PARRY!', '#38bdf8', 13);
+        }
+      }
+
+      // Düşmanlara vur
+      let hitAny = false;
+      for (const e of [...enemies]) {
+        const dx = e.x - p.x, dy = e.y - p.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < range + e.r) {
+          const angDiff = Math.abs(Math.atan2(Math.sin(Math.atan2(dy, dx) - p.angle), Math.cos(Math.atan2(dy, dx) - p.angle)));
+          if (isFinisher || angDiff < 1.25 || dist < 32) {
+            const nx = dist > 0 ? dx / dist : Math.cos(p.angle);
+            const ny = dist > 0 ? dy / dist : Math.sin(p.angle);
+            const force = isFinisher ? 340 : 190;
+            if (isFinisher) {
+              e.stun = Math.max(e.stun, 1.25);
+              addFloatText(e.x, e.y - 18, 'SERSEMLEDİ!', '#7dd3fc', 12);
+            }
+            damageEnemy(e, dmg, nx * force, ny * force, 1, false);
+            hitAny = true;
+          }
+        }
+      }
+      if (hitAny && isFinisher) hitStop = 0.035;
+
+    } else {
+      // P2: Ağır Şok Darbesi (Kalkan kırar & Fırlatır)
+      p.cooldown = 0.44;
+      p.lungeTimer = 0.08;
+      const slamX = p.x + Math.cos(p.angle) * 26;
+      const slamY = p.y + Math.sin(p.angle) * 26;
+      const radius = 98;
+
+      slashes.push({
+        type: 'ring',
+        x: slamX, y: slamY,
+        r: radius,
+        color: p.color,
+        life: 0.22, maxLife: 0.22
+      });
+      playSound('slam');
+      screenShake = Math.max(screenShake, 7);
+      spawnParticles(slamX, slamY, '#fb923c', 14, 240, 3);
+
+      // Mermi sektirme
+      for (const pr of projectiles) {
+        if (pr.friendly) continue;
+        const dx = pr.x - slamX, dy = pr.y - slamY;
+        const dist = Math.hypot(dx, dy);
+        if (dist < radius + pr.r) {
+          pr.friendly = true;
+          const a = dist > 0 ? Math.atan2(dy, dx) : p.angle;
+          pr.vx = Math.cos(a) * 520;
+          pr.vy = Math.sin(a) * 520;
+          pr.color = '#fb923c';
+          playSound('parry');
+          addFloatText(pr.x, pr.y - 12, 'PARRY!', '#fb923c', 13);
+        }
+      }
+
+      let hitAny = false;
+      for (const e of [...enemies]) {
+        const dx = e.x - slamX, dy = e.y - slamY;
+        const dist = Math.hypot(dx, dy);
+        if (dist < radius + e.r) {
+          const nx = dist > 0 ? dx / dist : Math.cos(p.angle);
+          const ny = dist > 0 ? dy / dist : Math.sin(p.angle);
+          damageEnemy(e, 2, nx * 560, ny * 560, 2, true);
+          hitAny = true;
+        }
+      }
+      if (hitAny) {
+        hitStop = 0.045;
+        screenShake = Math.max(screenShake, 11);
+      }
+    }
+  }
+
+  function hurtPlayer(p, dmg = 1) {
+    if (p.downed || p.invuln > 0) return;
+    p.hp = Math.max(0, p.hp - dmg);
+    p.invuln = 0.9;
+    screenShake = 12;
+    hitStop = 0.04;
+    playSound('hit');
+    spawnParticles(p.x, p.y, '#f43f5e', 20, 240, 3.5);
+
+    if (p.hp <= 0) {
+      p.downed = true;
+      p.reviveProgress = 0;
+      addFloatText(p.x, p.y - 24, `${p.name} DÜŞTÜ!`, '#f43f5e', 16);
+      playSound('explode');
+
+      if (players.every(pl => pl.downed)) {
+        state = 'GAME_OVER';
+        gameOverGrace = 0.8;
+      }
+    }
+    updateHUD();
+  }
+
+  // --- GÜNCELLEME DÖNGÜSÜ ---
+  function update(dt) {
+    if (gameOverGrace > 0) gameOverGrace -= dt;
+    if (hitStop > 0) { hitStop -= dt; return; }
+    if (screenShake > 0) screenShake = Math.max(0, screenShake - dt * 35);
+
+    for (const k of Object.keys(wallFlashes)) {
+      if (wallFlashes[k] > 0) wallFlashes[k] = Math.max(0, wallFlashes[k] - dt * 4);
+    }
+
+    // Parçacıklar & Efektler
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const pt = particles[i];
+      pt.x += pt.vx * dt; pt.y += pt.vy * dt;
+      pt.vx *= 0.92; pt.vy *= 0.92;
+      pt.life -= dt;
+      if (pt.life <= 0) particles.splice(i, 1);
+    }
+    for (let i = slashes.length - 1; i >= 0; i--) {
+      slashes[i].life -= dt;
+      if (slashes[i].life <= 0) slashes.splice(i, 1);
+    }
+    for (let i = floatTexts.length - 1; i >= 0; i--) {
+      const ft = floatTexts[i];
+      ft.y -= 32 * dt;
+      ft.life -= dt;
+      if (ft.life <= 0) floatTexts.splice(i, 1);
+    }
+
+    if (state !== 'PLAYING') return;
+
+    // Kombo sayacı
+    if (combo > 0) {
+      comboTimer -= dt;
+      if (comboTimer <= 0) { combo = 0; updateHUD(); }
+    }
+
+    // Dalga yönetimi
+    if (enemiesToSpawn.length > 0) {
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) {
+        spawnEnemy(enemiesToSpawn.shift());
+        spawnTimer = Math.max(0.35, 1.15 - wave * 0.06);
+      }
+    } else if (enemies.length === 0) {
+      wavePauseTimer += dt;
+      if (wavePauseTimer >= 1.6) {
+        wave++;
+        wavePauseTimer = 0;
+        // Dalga arası +1 can
+        for (const p of players) {
+          if (!p.downed && p.hp < p.maxHp) p.hp++;
+        }
+        setupWave(wave);
+        updateHUD();
+      }
+    }
+
+    // Oyuncular
+    for (const p of players) {
+      if (p.downed) continue;
+      if (p.cooldown > 0) p.cooldown -= dt;
+      if (p.invuln > 0) p.invuln -= dt;
+      if (p.id === 1 && p.comboReset > 0) {
+        p.comboReset -= dt;
+        if (p.comboReset <= 0) p.comboStep = 0;
+      }
+
+      if (p.lungeTimer > 0) {
+        p.lungeTimer -= dt;
+      } else {
+        let dx = 0, dy = 0;
+        if (p.id === 1) {
+          if (keys['KeyW']) dy -= 1;
+          if (keys['KeyS']) dy += 1;
+          if (keys['KeyA']) dx -= 1;
+          if (keys['KeyD']) dx += 1;
+        } else {
+          if (keys['ArrowUp']) dy -= 1;
+          if (keys['ArrowDown']) dy += 1;
+          if (keys['ArrowLeft']) dx -= 1;
+          if (keys['ArrowRight']) dx += 1;
+        }
+        if (dx !== 0 || dy !== 0) {
+          const len = Math.hypot(dx, dy);
+          dx /= len; dy /= len;
+          p.angle = Math.atan2(dy, dx);
+        }
+        p.vx = dx * p.speed;
+        p.vy = dy * p.speed;
+      }
+
+      p.x = Math.max(p.radius + 4, Math.min(W - p.radius - 4, p.x + p.vx * dt));
+      p.y = Math.max(p.radius + 4, Math.min(H - p.radius - 4, p.y + p.vy * dt));
+
+      p.trail.push({ x: p.x, y: p.y });
+      if (p.trail.length > 10) p.trail.shift();
+
+      // Can küresi toplama
+      for (let i = pickups.length - 1; i >= 0; i--) {
+        const pk = pickups[i];
+        if (Math.hypot(p.x - pk.x, p.y - pk.y) < p.radius + pk.r) {
+          if (p.hp < p.maxHp) p.hp++;
+          score += 25;
+          playSound('heal');
+          addFloatText(p.x, p.y - 20, '+1 CAN', '#4ade80', 14);
+          spawnParticles(pk.x, pk.y, '#4ade80', 14, 150, 3);
+          pickups.splice(i, 1);
+          updateHUD();
+        }
+      }
+    }
+
+    // Düşen oyuncuyu canlandırma (Co-op Revive)
+    const [p1, p2] = players;
+    const handleRevive = (downedP, helperP) => {
+      if (!downedP.downed || helperP.downed) return;
+      const dist = Math.hypot(downedP.x - helperP.x, downedP.y - helperP.y);
+      if (dist < 62) {
+        downedP.reviveProgress += dt / 1.7;
+        if (downedP.reviveProgress >= 1) {
+          downedP.downed = false;
+          downedP.hp = 2;
+          downedP.invuln = 1.5;
+          downedP.reviveProgress = 0;
+          playSound('heal');
+          addFloatText(downedP.x, downedP.y - 28, 'KURTARILDI!', '#4ade80', 17);
+          slashes.push({ type: 'ring', x: downedP.x, y: downedP.y, r: 120, color: '#4ade80', life: 0.3, maxLife: 0.3 });
+          for (const e of enemies) {
+            const dx = e.x - downedP.x, dy = e.y - downedP.y;
+            const d = Math.hypot(dx, dy);
+            if (d < 130 && d > 0) {
+              e.knockVx += (dx / d) * 420;
+              e.knockVy += (dy / d) * 420;
+            }
+          }
+          updateHUD();
+        }
+      } else {
+        downedP.reviveProgress = Math.max(0, downedP.reviveProgress - dt * 0.4);
+      }
+    };
+    handleRevive(p1, p2);
+    handleRevive(p2, p1);
+
+    // Pickups nabız
+    for (const pk of pickups) pk.pulse += dt * 5;
+
+    // Düşmanlar
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      if (!e) continue;
+      if (e.hitFlash > 0) e.hitFlash -= dt;
+      if (e.lastHitTimer > 0) e.lastHitTimer -= dt;
+      if (e.stun > 0) e.stun -= dt;
+
+      // Hedef seç (hayatta olan en yakın oyuncu)
+      let target = null, bestD = Infinity;
+      for (const p of players) {
+        if (p.downed) continue;
+        const d = Math.hypot(p.x - e.x, p.y - e.y);
+        if (d < bestD) { bestD = d; target = p; }
+      }
+
+      if (target && e.stun <= 0) {
+        const dx = target.x - e.x, dy = target.y - e.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (e.type === 'shooter' && d < 250) {
+          e.vx = -(dx / d) * e.speed * 0.6;
+          e.vy = -(dy / d) * e.speed * 0.6;
+        } else {
+          e.vx = (dx / d) * e.speed;
+          e.vy = (dy / d) * e.speed;
+        }
+
+        // Nişancı & Boss ateşi
+        if (e.type === 'shooter' || e.type === 'boss') {
+          e.shootCd -= dt;
+          if (e.shootCd <= 0) {
+            e.shootCd = e.type === 'boss' ? 1.8 : 2.3;
+            const shots = e.type === 'boss' ? [-0.3, 0, 0.3] : [0];
+            const baseA = Math.atan2(dy, dx);
+            for (const off of shots) {
+              projectiles.push({
+                x: e.x, y: e.y,
+                vx: Math.cos(baseA + off) * 290,
+                vy: Math.sin(baseA + off) * 290,
+                r: 6, color: '#f472b6', friendly: false, life: 3.5
+              });
+            }
+          }
+        }
+
+        // Bombacı patlaması
+        if (e.type === 'bomber') {
+          if (d < 52 && e.fuse < 0) e.fuse = 0.65;
+          if (e.fuse >= 0) {
+            e.fuse -= dt;
+            e.vx *= 0.3; e.vy *= 0.3;
+            if (e.fuse <= 0) {
+              slashes.push({ type: 'ring', x: e.x, y: e.y, r: 85, color: '#facc15', life: 0.25, maxLife: 0.25 });
+              for (const p of players) {
+                if (Math.hypot(p.x - e.x, p.y - e.y) < 85 + p.radius) hurtPlayer(p, 1);
+              }
+              killEnemy(e);
+              continue;
+            }
+          }
+        }
+      } else {
+        e.vx = 0; e.vy = 0;
+      }
+
+      e.x += (e.vx + e.knockVx) * dt;
+      e.y += (e.vy + e.knockVy) * dt;
+      e.knockVx *= Math.pow(0.015, dt);
+      e.knockVy *= Math.pow(0.015, dt);
+
+      const knockSpeed = Math.hypot(e.knockVx, e.knockVy);
+      if (knockSpeed < 160) e.flying = false;
+
+      // Duvara çarpma (Wall-Splat ekstra hasar!)
+      if (e.x > 0 && e.x < W && e.y > 0 && e.y < H) {
+        // Sadece arenaya girdikten sonra duvar sınırı uygula (yoksa spawn noktasında kalır)
+        e.inArena = true;
+      }
+      if (e.inArena) {
+        let wallHit = false;
+        if (e.x - e.r < 0) { e.x = e.r; e.knockVx = Math.abs(e.knockVx) * 0.5; wallHit = 'left'; }
+        if (e.x + e.r > W) { e.x = W - e.r; e.knockVx = -Math.abs(e.knockVx) * 0.5; wallHit = 'right'; }
+        if (e.y - e.r < 0) { e.y = e.r; e.knockVy = Math.abs(e.knockVy) * 0.5; wallHit = 'top'; }
+        if (e.y + e.r > H) { e.y = H - e.r; e.knockVy = -Math.abs(e.knockVy) * 0.5; wallHit = 'bottom'; }
+
+        if (wallHit && e.flying) {
+          e.flying = false;
+          wallFlashes[wallHit] = 1;
+          e.hp -= 2;
+          e.hitFlash = 0.15;
+          e.stun = Math.max(e.stun, 0.8);
+          addFloatText(e.x, e.y - 22, 'DUVAR ÇARPMASI! +2', '#fb923c', 14);
+          spawnParticles(e.x, e.y, '#fb923c', 16, 230, 3);
+          playSound('hit');
+          if (e.hp <= 0) { killEnemy(e); continue; }
+        }
+      }
+
+      // Domino: Fırlatılan düşman diğer düşmana çarparsa!
+      if (e.flying) {
+        for (let j = enemies.length - 1; j >= 0; j--) {
+          if (i === j) continue;
+          const o = enemies[j];
+          if (!o) continue;
+          const dx = o.x - e.x, dy = o.y - e.y;
+          const d = Math.hypot(dx, dy);
+          if (d < e.r + o.r && d > 0) {
+            e.flying = false;
+            o.hp -= 1;
+            o.hitFlash = 0.15;
+            o.knockVx += (dx / d) * 260;
+            o.knockVy += (dy / d) * 260;
+            addFloatText(o.x, o.y - 18, 'DOMİNO! +1', '#facc15', 13);
+            if (o.hp <= 0) killEnemy(o);
+            break;
+          }
+        }
+      }
+
+      // Oyuncuya temas hasarı
+      if (e.stun <= 0) {
+        for (const p of players) {
+          if (p.downed) continue;
+          const dx = p.x - e.x, dy = p.y - e.y;
+          const d = Math.hypot(dx, dy);
+          if (d < p.radius + e.r) {
+            hurtPlayer(p, 1);
+            if (d > 0) {
+              e.knockVx -= (dx / d) * 200;
+              e.knockVy -= (dy / d) * 200;
+            }
+          }
+        }
+      }
+    }
+
+    // Mermiler
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+      const pr = projectiles[i];
+      pr.x += pr.vx * dt;
+      pr.y += pr.vy * dt;
+      pr.life -= dt;
+
+      if (pr.life <= 0 || pr.x < -20 || pr.x > W + 20 || pr.y < -20 || pr.y > H + 20) {
+        projectiles.splice(i, 1);
+        continue;
+      }
+
+      if (pr.friendly) {
+        for (const e of [...enemies]) {
+          if (Math.hypot(e.x - pr.x, e.y - pr.y) < e.r + pr.r) {
+            damageEnemy(e, 3, pr.vx * 0.4, pr.vy * 0.4, 1, true);
+            projectiles.splice(i, 1);
+            break;
+          }
+        }
+      } else {
+        for (const p of players) {
+          if (!p.downed && Math.hypot(p.x - pr.x, p.y - pr.y) < p.radius + pr.r) {
+            hurtPlayer(p, 1);
+            projectiles.splice(i, 1);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // --- ÇİZİM ---
+  function drawGrid() {
+    ctx.strokeStyle = 'rgba(30, 41, 59, 0.45)';
+    ctx.lineWidth = 1;
+    for (let x = 50; x < W; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (let y = 50; y < H; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+
+    // Duvar çarpma parlamaları
+    ctx.lineWidth = 6;
+    if (wallFlashes.top > 0) { ctx.strokeStyle = `rgba(251,146,60,${wallFlashes.top})`; ctx.beginPath(); ctx.moveTo(0, 3); ctx.lineTo(W, 3); ctx.stroke(); }
+    if (wallFlashes.bottom > 0) { ctx.strokeStyle = `rgba(251,146,60,${wallFlashes.bottom})`; ctx.beginPath(); ctx.moveTo(0, H - 3); ctx.lineTo(W, H - 3); ctx.stroke(); }
+    if (wallFlashes.left > 0) { ctx.strokeStyle = `rgba(251,146,60,${wallFlashes.left})`; ctx.beginPath(); ctx.moveTo(3, 0); ctx.lineTo(3, H); ctx.stroke(); }
+    if (wallFlashes.right > 0) { ctx.strokeStyle = `rgba(251,146,60,${wallFlashes.right})`; ctx.beginPath(); ctx.moveTo(W - 3, 0); ctx.lineTo(W - 3, H); ctx.stroke(); }
+  }
+
+  function render() {
+    ctx.save();
+    if (screenShake > 0) {
+      ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
+    }
+
+    ctx.clearRect(0, 0, W, H);
+    drawGrid();
+
+    // Can Küreleri
+    for (const pk of pickups) {
+      const s = 1 + Math.sin(pk.pulse) * 0.15;
+      ctx.save();
+      ctx.translate(pk.x, pk.y);
+      ctx.scale(s, s);
+      ctx.shadowColor = '#4ade80';
+      ctx.shadowBlur = 14;
+      ctx.fillStyle = '#4ade80';
+      ctx.fillRect(-3, -9, 6, 18);
+      ctx.fillRect(-9, -3, 18, 6);
+      ctx.restore();
+    }
+
+    // Saldırı Efektleri
+    for (const sl of slashes) {
+      const alpha = Math.max(0, sl.life / sl.maxLife);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = sl.color;
+      ctx.shadowColor = sl.color;
+      ctx.shadowBlur = 14;
+      if (sl.type === 'arc') {
+        ctx.lineWidth = 10 * alpha + 2;
+        ctx.beginPath();
+        ctx.arc(sl.x, sl.y, sl.r, sl.angle - 1.05, sl.angle + 1.05);
+        ctx.stroke();
+      } else {
+        ctx.lineWidth = 5 * alpha + 1;
+        const progress = 1 - alpha;
+        ctx.beginPath();
+        ctx.arc(sl.x, sl.y, sl.r * (0.35 + progress * 0.65), 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Düşmanlar
+    for (const e of enemies) {
+      ctx.save();
+      ctx.translate(e.x, e.y);
+
+      const col = e.hitFlash > 0 ? '#ffffff' : e.color;
+      ctx.shadowColor = col;
+      ctx.shadowBlur = e.type === 'boss' ? 20 : 12;
+      ctx.fillStyle = col;
+
+      if (e.type === 'chaser') {
+        ctx.beginPath();
+        ctx.moveTo(0, -e.r); ctx.lineTo(e.r, e.r); ctx.lineTo(-e.r, e.r);
+        ctx.closePath(); ctx.fill();
+      } else if (e.type === 'shield') {
+        ctx.beginPath();
+        for (let k = 0; k < 6; k++) {
+          const a = (k * Math.PI) / 3;
+          const px = Math.cos(a) * e.r, py = Math.sin(a) * e.r;
+          if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath(); ctx.fill();
+      } else if (e.type === 'shooter') {
+        ctx.fillRect(-e.r * 0.85, -e.r * 0.85, e.r * 1.7, e.r * 1.7);
+      } else {
+        ctx.beginPath(); ctx.arc(0, 0, e.r, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // Kalkan halkası
+      if (e.shield) {
+        ctx.strokeStyle = '#e9d5ff';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, 0, e.r + 5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Sersemleme yıldızları
+      if (e.stun > 0) {
+        ctx.strokeStyle = '#7dd3fc';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, -e.r - 8, 5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Bombacı uyarı yanıp sönmesi
+      if (e.type === 'bomber' && e.fuse >= 0 && Math.floor(e.fuse * 16) % 2 === 0) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(0, 0, e.r + 8, 0, Math.PI * 2); ctx.stroke();
+      }
+
+      // Can barı (hasar görmüşse veya boss ise)
+      if (e.hp < e.maxHp || e.type === 'boss') {
+        const bw = e.r * 2;
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.fillRect(-bw / 2, e.r + 7, bw, 4);
+        ctx.fillStyle = e.color;
+        ctx.fillRect(-bw / 2, e.r + 7, bw * Math.max(0, e.hp / e.maxHp), 4);
+      }
+
+      ctx.restore();
+    }
+
+    // Mermiler
+    for (const pr of projectiles) {
+      ctx.save();
+      ctx.shadowColor = pr.color;
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = pr.color;
+      ctx.beginPath();
+      ctx.arc(pr.x, pr.y, pr.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Oyuncular
+    for (const p of players) {
+      if (p.downed) {
+        // Kurtarma halkası
+        ctx.save();
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = 3;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 42, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        if (p.reviveProgress > 0) {
+          ctx.strokeStyle = '#4ade80';
+          ctx.lineWidth = 5;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 42, -Math.PI / 2, -Math.PI / 2 + p.reviveProgress * Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('KURTAR!', p.x, p.y + 4);
+        ctx.restore();
+        continue;
+      }
+
+      if (p.invuln > 0 && Math.floor(p.invuln * 20) % 2 === 0) continue;
+
+      // İzi çiz
+      if (p.trail.length > 1) {
+        for (let i = 0; i < p.trail.length - 1; i++) {
+          const a = (i / p.trail.length) * 0.35;
+          ctx.strokeStyle = p.id === 1 ? `rgba(56,189,248,${a})` : `rgba(251,146,60,${a})`;
+          ctx.lineWidth = (i / p.trail.length) * 8;
+          ctx.beginPath();
+          ctx.moveTo(p.trail[i].x, p.trail[i].y);
+          ctx.lineTo(p.trail[i + 1].x, p.trail[i + 1].y);
+          ctx.stroke();
+        }
+      }
+
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.angle);
+      ctx.shadowColor = p.glow;
+      ctx.shadowBlur = 15;
+      ctx.fillStyle = p.color;
+      ctx.strokeStyle = '#f8fafc';
+      ctx.lineWidth = 2;
+
+      if (p.id === 1) {
+        // Çevik Siber Pençe (Ok/Jet şekli)
+        ctx.beginPath();
+        ctx.moveTo(p.radius + 4, 0);
+        ctx.lineTo(-p.radius + 3, -p.radius * 0.85);
+        ctx.lineTo(-p.radius * 0.4, 0);
+        ctx.lineTo(-p.radius + 3, p.radius * 0.85);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      } else {
+        // Ağır Titan (Sekizgen/Zırhlı şekil)
+        ctx.beginPath();
+        ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+        // Ön yumruk/kalkan çıkıntısı
+        ctx.fillStyle = '#fed7aa';
+        ctx.fillRect(p.radius - 6, -9, 10, 18);
+      }
+      ctx.restore();
+    }
+
+    // Parçacıklar
+    for (const pt of particles) {
+      ctx.globalAlpha = Math.max(0, pt.life / pt.maxLife);
+      ctx.fillStyle = pt.color;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, pt.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // Yüzen Yazılar
+    for (const ft of floatTexts) {
+      ctx.globalAlpha = Math.max(0, ft.life / ft.maxLife);
+      ctx.fillStyle = ft.color;
+      ctx.font = `800 ${ft.size}px "Segoe UI", system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText(ft.text, ft.x, ft.y);
+    }
+    ctx.globalAlpha = 1;
+
+    // Menü & Oyun Bitti
+    if (state === 'MENU') {
+      ctx.fillStyle = 'rgba(7, 9, 19, 0.78)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#38bdf8';
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 18;
+      ctx.font = '800 44px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText('NEON İTTİFAKI', W / 2, H / 2 - 48);
+      ctx.shadowBlur = 0;
+
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '600 18px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText('P1 (Siber Pençe): WASD + SPACE  |  P2 (Ağır Titan): Oklar + ENTER / Sağ Shift', W / 2, H / 2 + 4);
+
+      ctx.fillStyle = '#fb923c';
+      ctx.font = '600 15px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText('İpucu: P2 düşmanları duvara fırlatır & kalkan kırar; P1 seri vuruşlarla sersemletir!', W / 2, H / 2 + 38);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '700 16px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText('Başlamak için [SPACE] veya [ENTER] tuşuna basın', W / 2, H / 2 + 86);
+    } else if (state === 'GAME_OVER') {
+      ctx.fillStyle = 'rgba(7, 9, 19, 0.8)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#f43f5e';
+      ctx.shadowColor = '#f43f5e';
+      ctx.shadowBlur = 18;
+      ctx.font = '800 44px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText('İTTİFAK DÜŞTÜ!', W / 2, H / 2 - 32);
+      ctx.shadowBlur = 0;
+
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = '700 22px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText(`Ulaşılan Dalga: ${wave}   •   Skor: ${score}`, W / 2, H / 2 + 16);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '600 16px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText('Tekrar Savaşmak için [SPACE] veya [ENTER] tuşuna basın', W / 2, H / 2 + 64);
+    }
+
+    ctx.restore();
+  }
+
+  // --- ANA DÖNGÜ ---
+  players = createPlayers();
+  updateHUD();
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.04, (now - last) / 1000);
+    last = now;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

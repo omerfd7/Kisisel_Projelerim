@@ -1,0 +1,1553 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DUAL POLARITY — Çift Kutup Arcade</title>
+  <style>
+    :root {
+      --bg: #06060b;
+      --cyan: #00f0ff;
+      --magenta: #ff0055;
+      --text: #f0f4ff;
+      --muted: #7c85a6;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+      cursor: none;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* Subtle CRT scanline & vignette overlay */
+    .overlay-fx {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at center, transparent 55%, rgba(0, 0, 0, 0.65) 100%),
+        repeating-linear-gradient(
+          to bottom,
+          rgba(255, 255, 255, 0.015) 0px,
+          rgba(255, 255, 255, 0.015) 1px,
+          transparent 1px,
+          transparent 3px
+        );
+      z-index: 2;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <div class="overlay-fx"></div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      // =========================================================
+      // CANVAS & DISPLAY SETUP
+      // =========================================================
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d', { alpha: false });
+
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      let dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+      function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      window.addEventListener('resize', resize);
+      resize();
+
+      // =========================================================
+      // CONSTANTS & PALETTE
+      // =========================================================
+      const POLARITY = {
+        CYAN: 0,
+        MAGENTA: 1
+      };
+
+      const COLORS = {
+        bg: '#06060b',
+        grid: 'rgba(255, 255, 255, 0.04)',
+        [POLARITY.CYAN]: {
+          main: '#00f0ff',
+          glow: 'rgba(0, 240, 255, 0.65)',
+          soft: 'rgba(0, 240, 255, 0.14)',
+          name: 'MAVİ KUTUP'
+        },
+        [POLARITY.MAGENTA]: {
+          main: '#ff0055',
+          glow: 'rgba(255, 0, 85, 0.65)',
+          soft: 'rgba(255, 0, 85, 0.14)',
+          name: 'PEMBE KUTUP'
+        },
+        gold: '#ffd60a',
+        white: '#ffffff'
+      };
+
+      const STORAGE_KEYS = {
+        highScore: 'dualPolarity_highScore_v1',
+        bestCombo: 'dualPolarity_bestCombo_v1'
+      };
+
+      // =========================================================
+      // PROCEDURAL WEB AUDIO ENGINE
+      // =========================================================
+      class SoundEngine {
+        constructor() {
+          this.ctx = null;
+          this.master = null;
+        }
+
+        init() {
+          if (!this.ctx) {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+            this.ctx = new AudioCtx();
+            this.master = this.ctx.createGain();
+            this.master.gain.value = 0.32;
+            this.master.connect(this.ctx.destination);
+          }
+          if (this.ctx && this.ctx.state === 'suspended') {
+            this.ctx.resume();
+          }
+        }
+
+        playSwap(polarity) {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+
+          osc.type = polarity === POLARITY.CYAN ? 'sine' : 'triangle';
+          const startFreq = polarity === POLARITY.CYAN ? 320 : 580;
+          const endFreq = polarity === POLARITY.CYAN ? 680 : 290;
+
+          osc.frequency.setValueAtTime(startFreq, now);
+          osc.frequency.exponentialRampToValueAtTime(endFreq, now + 0.085);
+
+          gain.gain.setValueAtTime(0.35, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
+
+          osc.connect(gain);
+          gain.connect(this.master);
+          osc.start(now);
+          osc.stop(now + 0.1);
+        }
+
+        playAbsorb(streak, combo) {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+          const baseNotes = [392.0, 440.0, 523.25, 587.33, 659.25]; // G4, A4, C5, D5, E5
+          const noteIdx = Math.min(Math.max(streak - 1, 0), baseNotes.length - 1);
+          const pitchBoost = Math.min(combo * 6, 180);
+          const freq = baseNotes[noteIdx] + pitchBoost;
+
+          const osc = this.ctx.createOscillator();
+          const sub = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, now);
+          osc.frequency.exponentialRampToValueAtTime(freq * 1.25, now + 0.11);
+
+          sub.type = 'sine';
+          sub.frequency.setValueAtTime(freq * 0.5, now);
+
+          gain.gain.setValueAtTime(0.4, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+
+          osc.connect(gain);
+          sub.connect(gain);
+          gain.connect(this.master);
+
+          osc.start(now);
+          sub.start(now);
+          osc.stop(now + 0.15);
+          sub.stop(now + 0.15);
+        }
+
+        playOverload() {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+
+          // Deep sub-bass drop
+          const sub = this.ctx.createOscillator();
+          const subGain = this.ctx.createGain();
+          sub.type = 'sine';
+          sub.frequency.setValueAtTime(160, now);
+          sub.frequency.exponentialRampToValueAtTime(34, now + 0.55);
+
+          subGain.gain.setValueAtTime(0.95, now);
+          subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+
+          sub.connect(subGain);
+          subGain.connect(this.master);
+          sub.start(now);
+          sub.stop(now + 0.62);
+
+          // Filtered noise burst
+          const bufferSize = Math.floor(this.ctx.sampleRate * 0.45);
+          const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+          const data = buffer.getChannelData(0);
+          for (let i = 0; i < bufferSize; i++) {
+            data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.3));
+          }
+          const noise = this.ctx.createBufferSource();
+          noise.buffer = buffer;
+
+          const filter = this.ctx.createBiquadFilter();
+          filter.type = 'bandpass';
+          filter.frequency.setValueAtTime(1400, now);
+          filter.frequency.exponentialRampToValueAtTime(180, now + 0.45);
+          filter.Q.value = 1.5;
+
+          const noiseGain = this.ctx.createGain();
+          noiseGain.gain.setValueAtTime(0.65, now);
+          noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.45);
+
+          noise.connect(filter);
+          filter.connect(noiseGain);
+          noiseGain.connect(this.master);
+          noise.start(now);
+
+          // Shimmering triad arpeggio
+          [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const g = this.ctx.createGain();
+            const t = now + i * 0.045;
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(freq, t);
+
+            g.gain.setValueAtTime(0.18, t);
+            g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+
+            osc.connect(g);
+            g.connect(this.master);
+            osc.start(t);
+            osc.stop(t + 0.26);
+          });
+        }
+
+        playHit() {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+
+          const osc = this.ctx.createOscillator();
+          const osc2 = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(135, now);
+          osc.frequency.exponentialRampToValueAtTime(42, now + 0.28);
+
+          osc2.type = 'square';
+          osc2.frequency.setValueAtTime(98, now);
+          osc2.frequency.exponentialRampToValueAtTime(35, now + 0.28);
+
+          gain.gain.setValueAtTime(0.55, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+          osc.connect(gain);
+          osc2.connect(gain);
+          gain.connect(this.master);
+
+          osc.start(now);
+          osc2.start(now);
+          osc.stop(now + 0.31);
+          osc2.stop(now + 0.31);
+        }
+
+        playGameOver() {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+          const freqs = [330, 277.18, 220, 146.83];
+          freqs.forEach((f, idx) => {
+            const osc = this.ctx.createOscillator();
+            const g = this.ctx.createGain();
+            const t = now + idx * 0.11;
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(f, t);
+            osc.frequency.exponentialRampToValueAtTime(f * 0.85, t + 0.22);
+
+            g.gain.setValueAtTime(0.26, t);
+            g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+
+            osc.connect(g);
+            g.connect(this.master);
+            osc.start(t);
+            osc.stop(t + 0.26);
+          });
+        }
+
+        playStart() {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+          [261.63, 329.63, 392.0, 523.25].forEach((f, idx) => {
+            const osc = this.ctx.createOscillator();
+            const g = this.ctx.createGain();
+            const t = now + idx * 0.04;
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(f, t);
+            g.gain.setValueAtTime(0.24, t);
+            g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+            osc.connect(g);
+            g.connect(this.master);
+            osc.start(t);
+            osc.stop(t + 0.21);
+          });
+        }
+      }
+
+      const sound = new SoundEngine();
+
+      // =========================================================
+      // GAME STATE & PERSISTENCE
+      // =========================================================
+      const STATE = {
+        MENU: 'MENU',
+        PLAYING: 'PLAYING',
+        GAMEOVER: 'GAMEOVER'
+      };
+
+      let gameState = STATE.MENU;
+      let highScore = Number(localStorage.getItem(STORAGE_KEYS.highScore)) || 0;
+      let bestCombo = Number(localStorage.getItem(STORAGE_KEYS.bestCombo)) || 1;
+      let isNewHighScore = false;
+      let isNewBestCombo = false;
+      let gameOverTimestamp = 0;
+
+      // Input state (Keyboard only)
+      const keys = Object.create(null);
+
+      // Run metrics
+      let score = 0;
+      let combo = 1;
+      let maxRunCombo = 1;
+      let comboTimer = 0;
+      const COMBO_DURATION = 4.0;
+      let streak = 0; // 0..5 same-color absorption streak
+      const STREAK_TARGET = 5;
+      let lives = 3;
+      const MAX_LIVES = 3;
+      let elapsedTime = 0;
+
+      // Juice / FX
+      let shakeTime = 0;
+      let shakeMagnitude = 0;
+      let hitStop = 0;
+      let screenFlash = 0;
+      let screenFlashColor = '#ffffff';
+      let overloadTextTimer = 0;
+
+      // Entities
+      const player = {
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        radius: 17,
+        polarity: POLARITY.CYAN,
+        invulnTimer: 0,
+        angle: 0,
+        scalePulse: 1,
+        trail: []
+      };
+
+      let projectiles = [];
+      let particles = [];
+      let shockwaves = [];
+      let floatingTexts = [];
+      let bgStars = [];
+
+      // Spawner timers
+      let spawnTimer = 0;
+      let waveTimer = 6.5;
+
+      // Initialize ambient stars
+      function initStars() {
+        bgStars = [];
+        for (let i = 0; i < 65; i++) {
+          bgStars.push({
+            x: Math.random() * width,
+            y: Math.random() * height,
+            size: Math.random() * 2 + 0.6,
+            speed: Math.random() * 14 + 6,
+            alpha: Math.random() * 0.35 + 0.1
+          });
+        }
+      }
+      initStars();
+
+      // =========================================================
+      // HELPERS & EFFECTS
+      // =========================================================
+      function triggerShake(magnitude, duration) {
+        shakeMagnitude = Math.max(shakeMagnitude, magnitude);
+        shakeTime = Math.max(shakeTime, duration);
+      }
+
+      function addShockwave(x, y, color, maxRadius, lineWidth = 4, speed = 650, isOverload = false) {
+        shockwaves.push({
+          x,
+          y,
+          radius: 10,
+          maxRadius,
+          color,
+          lineWidth,
+          speed,
+          isOverload,
+          convertedIds: isOverload ? new Set() : null
+        });
+      }
+
+      function spawnParticles(x, y, color, count, speedMin = 60, speedMax = 260, size = 3.5) {
+        for (let i = 0; i < count; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = speedMin + Math.random() * (speedMax - speedMin);
+          particles.push({
+            x,
+            y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 0.3 + Math.random() * 0.4,
+            maxLife: 0.7,
+            color,
+            size: size * (0.6 + Math.random() * 0.8)
+          });
+        }
+      }
+
+      function addFloatingText(x, y, text, color, scale = 1) {
+        floatingTexts.push({
+          x,
+          y,
+          vy: -52,
+          text,
+          color,
+          life: 0.85,
+          maxLife: 0.85,
+          scale
+        });
+      }
+
+      function saveRecords() {
+        if (score > highScore) {
+          highScore = score;
+          isNewHighScore = true;
+          localStorage.setItem(STORAGE_KEYS.highScore, String(highScore));
+        }
+        if (maxRunCombo > bestCombo) {
+          bestCombo = maxRunCombo;
+          isNewBestCombo = true;
+          localStorage.setItem(STORAGE_KEYS.bestCombo, String(bestCombo));
+        }
+      }
+
+      // =========================================================
+      // GAME LIFECYCLE
+      // =========================================================
+      function startGame() {
+        sound.init();
+        sound.playStart();
+
+        gameState = STATE.PLAYING;
+        score = 0;
+        combo = 1;
+        maxRunCombo = 1;
+        comboTimer = 0;
+        streak = 0;
+        lives = MAX_LIVES;
+        elapsedTime = 0;
+        isNewHighScore = false;
+        isNewBestCombo = false;
+
+        player.x = width / 2;
+        player.y = height / 2;
+        player.vx = 0;
+        player.vy = 0;
+        player.polarity = POLARITY.CYAN;
+        player.invulnTimer = 0.8;
+        player.scalePulse = 1.3;
+        player.trail = [];
+
+        projectiles = [];
+        particles = [];
+        shockwaves = [];
+        floatingTexts = [];
+
+        spawnTimer = 0.4;
+        waveTimer = 5.5;
+        shakeTime = 0;
+        shakeMagnitude = 0;
+        hitStop = 0;
+        screenFlash = 0;
+        overloadTextTimer = 0;
+
+        addShockwave(player.x, player.y, COLORS[player.polarity].main, 130, 4, 500);
+      }
+
+      function triggerGameOver() {
+        gameState = STATE.GAMEOVER;
+        gameOverTimestamp = performance.now();
+        saveRecords();
+        sound.playGameOver();
+        triggerShake(18, 0.5);
+        screenFlash = 0.5;
+        screenFlashColor = COLORS[POLARITY.MAGENTA].main;
+        spawnParticles(player.x, player.y, COLORS[player.polarity].main, 45, 80, 420, 5);
+        spawnParticles(player.x, player.y, '#ffffff', 20, 50, 260, 3);
+      }
+
+      // =========================================================
+      // KEYBOARD INPUT (100% MOUSE-FREE)
+      // =========================================================
+      window.addEventListener('keydown', (e) => {
+        const blockScroll = [
+          'Space',
+          'ArrowUp',
+          'ArrowDown',
+          'ArrowLeft',
+          'ArrowRight'
+        ];
+        if (blockScroll.includes(e.code)) {
+          e.preventDefault();
+        }
+
+        sound.init();
+        keys[e.code] = true;
+
+        if (e.repeat) return;
+
+        if (gameState === STATE.MENU) {
+          if (e.code === 'Space' || e.code === 'Enter') {
+            startGame();
+          }
+          return;
+        }
+
+        if (gameState === STATE.GAMEOVER) {
+          if (e.code === 'Space' || e.code === 'Enter') {
+            if (performance.now() - gameOverTimestamp > 450) {
+              startGame();
+            }
+          }
+          return;
+        }
+
+        if (gameState === STATE.PLAYING) {
+          if (e.code === 'Space') {
+            switchPolarity();
+          }
+        }
+      });
+
+      window.addEventListener('keyup', (e) => {
+        keys[e.code] = false;
+      });
+
+      function switchPolarity() {
+        player.polarity = player.polarity === POLARITY.CYAN ? POLARITY.MAGENTA : POLARITY.CYAN;
+        player.scalePulse = 1.38;
+
+        // Switching polarity resets the consecutive same-color overload streak
+        if (streak > 0) {
+          streak = 0;
+        }
+
+        const c = COLORS[player.polarity].main;
+        sound.playSwap(player.polarity);
+        triggerShake(5, 0.12);
+        addShockwave(player.x, player.y, c, 95, 3.5, 580);
+        spawnParticles(player.x, player.y, c, 14, 70, 210, 3);
+      }
+
+      // =========================================================
+      // PROJECTILE SPAWNING & PATTERNS
+      // =========================================================
+      let nextProjId = 1;
+
+      function getDifficulty() {
+        // Ramps smoothly from 1.0 upwards over time & score
+        return 1 + Math.min(elapsedTime / 28, 2.4) + Math.min(score / 12000, 1.2);
+      }
+
+      function spawnSingleProjectile(forcedPolarity = null, customPos = null, customVel = null, speedMult = 1, radius = 11) {
+        const diff = getDifficulty();
+        const polarity = forcedPolarity !== null
+          ? forcedPolarity
+          : (Math.random() < 0.5 ? POLARITY.CYAN : POLARITY.MAGENTA);
+
+        let x, y, vx, vy;
+        const baseSpeed = (145 + Math.random() * 95 + diff * 26) * speedMult;
+
+        if (customPos && customVel) {
+          x = customPos.x;
+          y = customPos.y;
+          vx = customVel.x;
+          vy = customVel.y;
+        } else {
+          // Spawn from one of 4 edges
+          const edge = Math.floor(Math.random() * 4);
+          const margin = 28;
+          if (edge === 0) { // Top
+            x = Math.random() * width;
+            y = -margin;
+          } else if (edge === 1) { // Right
+            x = width + margin;
+            y = Math.random() * height;
+          } else if (edge === 2) { // Bottom
+            x = Math.random() * width;
+            y = height + margin;
+          } else { // Left
+            x = -margin;
+            y = Math.random() * height;
+          }
+
+          // Aim generally near the player with variance so patterns feel dynamic
+          const targetX = player.x + (Math.random() - 0.5) * 260;
+          const targetY = player.y + (Math.random() - 0.5) * 260;
+          const angle = Math.atan2(targetY - y, targetX - x);
+
+          vx = Math.cos(angle) * baseSpeed;
+          vy = Math.sin(angle) * baseSpeed;
+        }
+
+        projectiles.push({
+          id: nextProjId++,
+          x,
+          y,
+          vx,
+          vy,
+          radius,
+          polarity,
+          rot: Math.random() * Math.PI * 2,
+          rotSpeed: (Math.random() - 0.5) * 5,
+          isFast: speedMult > 1.25
+        });
+      }
+
+      function spawnWavePattern() {
+        const diff = getDifficulty();
+        const pattern = Math.floor(Math.random() * 3);
+
+        if (pattern === 0) {
+          // Crossfire from two opposite edges
+          const horizontal = Math.random() < 0.5;
+          const count = Math.min(4 + Math.floor(diff), 8);
+          const polA = Math.random() < 0.5 ? POLARITY.CYAN : POLARITY.MAGENTA;
+          const polB = polA === POLARITY.CYAN ? POLARITY.MAGENTA : POLARITY.CYAN;
+
+          for (let i = 0; i < count; i++) {
+            const pol = i % 2 === 0 ? polA : polB;
+            const speed = 175 + diff * 22;
+            if (horizontal) {
+              const fromLeft = i % 2 === 0;
+              const py = (height / (count + 1)) * (i + 1);
+              spawnSingleProjectile(
+                pol,
+                { x: fromLeft ? -25 : width + 25, y: py },
+                { x: (fromLeft ? 1 : -1) * speed, y: (Math.random() - 0.5) * 30 },
+                1,
+                11
+              );
+            } else {
+              const fromTop = i % 2 === 0;
+              const px = (width / (count + 1)) * (i + 1);
+              spawnSingleProjectile(
+                pol,
+                { x: px, y: fromTop ? -25 : height + 25 },
+                { x: (Math.random() - 0.5) * 30, y: (fromTop ? 1 : -1) * speed },
+                1,
+                11
+              );
+            }
+          }
+        } else if (pattern === 1) {
+          // Corner Fan Burst
+          const corners = [
+            { x: -20, y: -20, baseAngle: Math.atan2(height / 2, width / 2) },
+            { x: width + 20, y: -20, baseAngle: Math.atan2(height / 2, -width / 2) },
+            { x: -20, y: height + 20, baseAngle: Math.atan2(-height / 2, width / 2) },
+            { x: width + 20, y: height + 20, baseAngle: Math.atan2(-height / 2, -width / 2) }
+          ];
+          const c = corners[Math.floor(Math.random() * corners.length)];
+          const fanCount = 5;
+          const pol = Math.random() < 0.5 ? POLARITY.CYAN : POLARITY.MAGENTA;
+          const speed = 195 + diff * 20;
+
+          for (let i = 0; i < fanCount; i++) {
+            const offset = (i - (fanCount - 1) / 2) * 0.22;
+            const ang = c.baseAngle + offset;
+            // Alternate one odd color in the fan to keep player alert!
+            const p = i === 2 ? (pol === POLARITY.CYAN ? POLARITY.MAGENTA : POLARITY.CYAN) : pol;
+            spawnSingleProjectile(
+              p,
+              { x: c.x, y: c.y },
+              { x: Math.cos(ang) * speed, y: Math.sin(ang) * speed },
+              1,
+              10.5
+            );
+          }
+        } else {
+          // Dual Aimed Sniper Darts
+          const count = 3;
+          for (let i = 0; i < count; i++) {
+            const ang = Math.random() * Math.PI * 2;
+            const dist = Math.hypot(width, height) * 0.55;
+            const sx = width / 2 + Math.cos(ang) * dist;
+            const sy = height / 2 + Math.sin(ang) * dist;
+            const aim = Math.atan2(player.y - sy, player.x - sx);
+            const speed = 265 + diff * 25;
+            spawnSingleProjectile(
+              i % 2 === 0 ? POLARITY.CYAN : POLARITY.MAGENTA,
+              { x: sx, y: sy },
+              { x: Math.cos(aim) * speed, y: Math.sin(aim) * speed },
+              1.35,
+              9.5
+            );
+          }
+        }
+      }
+
+      // =========================================================
+      // OVERLOAD MECHANIC (5 CONSECUTIVE SAME-COLOR ABSORPTIONS)
+      // =========================================================
+      function triggerOverload() {
+        streak = 0;
+        const maxDist = Math.hypot(width, height);
+        const col = COLORS[player.polarity].main;
+
+        sound.playOverload();
+        triggerShake(16, 0.42);
+        hitStop = 0.055;
+        screenFlash = 0.42;
+        screenFlashColor = col;
+        overloadTextTimer = 1.4;
+        player.invulnTimer = Math.max(player.invulnTimer, 0.75);
+        player.scalePulse = 1.75;
+
+        // Expanding overload shockwave that sweeps the entire screen
+        addShockwave(player.x, player.y, '#ffffff', maxDist, 10, 1450, true);
+        addShockwave(player.x, player.y, col, maxDist * 0.9, 6, 1200, false);
+
+        spawnParticles(player.x, player.y, col, 40, 120, 460, 4.5);
+        spawnParticles(player.x, player.y, COLORS.gold, 24, 90, 360, 3.5);
+        addFloatingText(player.x, player.y - 36, 'AŞIRI YÜKLEME!', COLORS.gold, 1.45);
+      }
+
+      // =========================================================
+      // UPDATE LOOP
+      // =========================================================
+      function update(dt) {
+        // Ambient stars always drift
+        for (const s of bgStars) {
+          s.y += s.speed * dt;
+          if (s.y > height) {
+            s.y = -4;
+            s.x = Math.random() * width;
+          }
+        }
+
+        // Decay screen flash & shake
+        if (screenFlash > 0) screenFlash = Math.max(0, screenFlash - dt * 1.8);
+        if (shakeTime > 0) {
+          shakeTime = Math.max(0, shakeTime - dt);
+          if (shakeTime === 0) shakeMagnitude = 0;
+        }
+        if (overloadTextTimer > 0) overloadTextTimer = Math.max(0, overloadTextTimer - dt);
+
+        // Update particles, shockwaves, floating texts even on Game Over
+        updateEffects(dt);
+
+        if (gameState !== STATE.PLAYING) return;
+
+        // Hit-stop micro-freeze for impact punch
+        if (hitStop > 0) {
+          hitStop = Math.max(0, hitStop - dt);
+          return;
+        }
+
+        elapsedTime += dt;
+
+        // Combo decay
+        if (combo > 1) {
+          comboTimer -= dt;
+          if (comboTimer <= 0) {
+            combo = 1;
+            comboTimer = 0;
+          }
+        }
+
+        // Player Movement (Arrow keys or WASD)
+        let moveX = 0;
+        let moveY = 0;
+        if (keys['ArrowLeft'] || keys['KeyA']) moveX -= 1;
+        if (keys['ArrowRight'] || keys['KeyD']) moveX += 1;
+        if (keys['ArrowUp'] || keys['KeyW']) moveY -= 1;
+        if (keys['ArrowDown'] || keys['KeyS']) moveY += 1;
+
+        if (moveX !== 0 && moveY !== 0) {
+          const inv = 1 / Math.SQRT2;
+          moveX *= inv;
+          moveY *= inv;
+        }
+
+        const ACCEL = 2900;
+        const MAX_SPEED = 415;
+        const FRICTION = 10.5;
+
+        player.vx += moveX * ACCEL * dt;
+        player.vy += moveY * ACCEL * dt;
+
+        // Exponential damping for tight, responsive arcade feel
+        const damp = Math.exp(-FRICTION * dt);
+        player.vx *= damp;
+        player.vy *= damp;
+
+        const speed = Math.hypot(player.vx, player.vy);
+        if (speed > MAX_SPEED) {
+          player.vx = (player.vx / speed) * MAX_SPEED;
+          player.vy = (player.vy / speed) * MAX_SPEED;
+        }
+
+        player.x += player.vx * dt;
+        player.y += player.vy * dt;
+
+        // Keep inside arena bounds
+        const pad = player.radius + 8;
+        if (player.x < pad) { player.x = pad; player.vx = 0; }
+        if (player.x > width - pad) { player.x = width - pad; player.vx = 0; }
+        if (player.y < pad) { player.y = pad; player.vy = 0; }
+        if (player.y > height - pad) { player.y = height - pad; player.vy = 0; }
+
+        if (player.invulnTimer > 0) player.invulnTimer = Math.max(0, player.invulnTimer - dt);
+        player.angle += dt * 2.4;
+        player.scalePulse += (1 - player.scalePulse) * Math.min(1, dt * 14);
+
+        // Trail
+        player.trail.push({
+          x: player.x,
+          y: player.y,
+          color: COLORS[player.polarity].main,
+          life: 0.22
+        });
+        for (let i = player.trail.length - 1; i >= 0; i--) {
+          player.trail[i].life -= dt;
+          if (player.trail[i].life <= 0) player.trail.splice(i, 1);
+        }
+
+        // Spawning
+        const diff = getDifficulty();
+        spawnTimer -= dt;
+        if (spawnTimer <= 0) {
+          spawnSingleProjectile();
+          const interval = Math.max(0.22, 0.88 - (diff - 1) * 0.2);
+          spawnTimer = interval * (0.75 + Math.random() * 0.5);
+        }
+
+        waveTimer -= dt;
+        if (waveTimer <= 0) {
+          spawnWavePattern();
+          waveTimer = Math.max(3.4, 7.2 - (diff - 1) * 1.1);
+        }
+
+        // Check Overload Shockwave conversion against all projectiles
+        for (const sw of shockwaves) {
+          if (!sw.isOverload) continue;
+          for (let i = projectiles.length - 1; i >= 0; i--) {
+            const p = projectiles[i];
+            const dist = Math.hypot(p.x - sw.x, p.y - sw.y);
+            if (dist <= sw.radius + p.radius + 16 && !sw.convertedIds.has(p.id)) {
+              sw.convertedIds.add(p.id);
+              const pts = 25 * combo;
+              score += pts;
+              combo += 1;
+              if (combo > maxRunCombo) maxRunCombo = combo;
+              comboTimer = COMBO_DURATION;
+
+              spawnParticles(p.x, p.y, COLORS[p.polarity].main, 10, 50, 200, 3);
+              spawnParticles(p.x, p.y, COLORS.gold, 5, 40, 140, 2.5);
+              addFloatingText(p.x, p.y, `+${pts}`, COLORS.gold, 0.95);
+              projectiles.splice(i, 1);
+            }
+          }
+        }
+
+        // Update Projectiles & Collisions
+        for (let i = projectiles.length - 1; i >= 0; i--) {
+          const p = projectiles[i];
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.rot += p.rotSpeed * dt;
+
+          // Remove far out-of-bounds projectiles
+          const margin = 120;
+          if (p.x < -margin || p.x > width + margin || p.y < -margin || p.y > height + margin) {
+            projectiles.splice(i, 1);
+            continue;
+          }
+
+          // Collision with player
+          const dx = p.x - player.x;
+          const dy = p.y - player.y;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist < player.radius + p.radius + 2) {
+            if (p.polarity === player.polarity) {
+              // ABSORB!
+              projectiles.splice(i, 1);
+
+              const pts = 10 * combo;
+              score += pts;
+              combo += 1;
+              if (combo > maxRunCombo) maxRunCombo = combo;
+              comboTimer = COMBO_DURATION;
+              streak += 1;
+              player.scalePulse = 1.24;
+
+              const c = COLORS[p.polarity].main;
+              spawnParticles(p.x, p.y, c, 12, 60, 220, 3);
+              addFloatingText(p.x, p.y - 10, `+${pts}`, c, 0.95);
+              sound.playAbsorb(streak, combo);
+              triggerShake(2.5, 0.07);
+
+              if (streak >= STREAK_TARGET) {
+                triggerOverload();
+              }
+            } else {
+              // OPPOSITE POLARITY HIT!
+              if (player.invulnTimer <= 0) {
+                projectiles.splice(i, 1);
+                lives -= 1;
+                combo = 1;
+                comboTimer = 0;
+                streak = 0;
+                player.invulnTimer = 1.35;
+                player.scalePulse = 0.7;
+
+                sound.playHit();
+                triggerShake(13, 0.32);
+                hitStop = 0.05;
+                screenFlash = 0.35;
+                screenFlashColor = '#ff2a55';
+                spawnParticles(player.x, player.y, COLORS[p.polarity].main, 24, 90, 310, 4);
+                addFloatingText(player.x, player.y - 24, 'HASAR!', '#ff3355', 1.25);
+
+                if (lives <= 0) {
+                  triggerGameOver();
+                  return;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      function updateEffects(dt) {
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const pt = particles[i];
+          pt.x += pt.vx * dt;
+          pt.y += pt.vy * dt;
+          pt.vx *= Math.exp(-3.5 * dt);
+          pt.vy *= Math.exp(-3.5 * dt);
+          pt.life -= dt;
+          if (pt.life <= 0) particles.splice(i, 1);
+        }
+
+        for (let i = shockwaves.length - 1; i >= 0; i--) {
+          const sw = shockwaves[i];
+          sw.radius += sw.speed * dt;
+          if (sw.radius >= sw.maxRadius) shockwaves.splice(i, 1);
+        }
+
+        for (let i = floatingTexts.length - 1; i >= 0; i--) {
+          const ft = floatingTexts[i];
+          ft.y += ft.vy * dt;
+          ft.life -= dt;
+          if (ft.life <= 0) floatingTexts.splice(i, 1);
+        }
+      }
+
+      // =========================================================
+      // RENDERING
+      // =========================================================
+      function render() {
+        ctx.save();
+
+        // Screen shake transform
+        if (shakeTime > 0 && shakeMagnitude > 0) {
+          const sx = (Math.random() * 2 - 1) * shakeMagnitude;
+          const sy = (Math.random() * 2 - 1) * shakeMagnitude;
+          ctx.translate(sx, sy);
+        }
+
+        // Background
+        ctx.fillStyle = COLORS.bg;
+        ctx.fillRect(-30, -30, width + 60, height + 60);
+
+        // Subtle polarity ambient glow in center / behind player
+        const activePol = gameState === STATE.PLAYING ? player.polarity : POLARITY.CYAN;
+        const bgGrad = ctx.createRadialGradient(
+          gameState === STATE.PLAYING ? player.x : width / 2,
+          gameState === STATE.PLAYING ? player.y : height / 2,
+          20,
+          gameState === STATE.PLAYING ? player.x : width / 2,
+          gameState === STATE.PLAYING ? player.y : height / 2,
+          Math.max(width, height) * 0.55
+        );
+        bgGrad.addColorStop(0, COLORS[activePol].soft);
+        bgGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, width, height);
+
+        // Grid
+        drawGrid();
+
+        // Stars
+        for (const s of bgStars) {
+          ctx.fillStyle = `rgba(210, 225, 255, ${s.alpha})`;
+          ctx.fillRect(s.x, s.y, s.size, s.size);
+        }
+
+        // Shockwaves
+        for (const sw of shockwaves) {
+          const progress = sw.radius / sw.maxRadius;
+          const alpha = Math.max(0, 1 - progress);
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(sw.x, sw.y, sw.radius, 0, Math.PI * 2);
+          ctx.strokeStyle = sw.color;
+          ctx.globalAlpha = alpha * (sw.isOverload ? 0.95 : 0.75);
+          ctx.lineWidth = sw.lineWidth * (1 - progress * 0.5);
+          ctx.shadowBlur = sw.isOverload ? 28 : 14;
+          ctx.shadowColor = sw.color;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Particles
+        for (const pt of particles) {
+          const alpha = Math.max(0, pt.life / pt.maxLife);
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = pt.color;
+          ctx.shadowBlur = 10;
+          ctx.shadowColor = pt.color;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, pt.size * (0.4 + alpha * 0.6), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        if (gameState === STATE.PLAYING || gameState === STATE.GAMEOVER) {
+          // Projectiles
+          for (const p of projectiles) {
+            drawProjectile(p);
+          }
+        }
+
+        if (gameState === STATE.PLAYING) {
+          drawPlayer();
+        }
+
+        // Floating Score / Status Popups
+        for (const ft of floatingTexts) {
+          const alpha = Math.max(0, ft.life / ft.maxLife);
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.font = `800 ${Math.round(16 * ft.scale)}px "Segoe UI", system-ui, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillStyle = ft.color;
+          ctx.shadowBlur = 10;
+          ctx.shadowColor = ft.color;
+          ctx.fillText(ft.text, ft.x, ft.y);
+          ctx.restore();
+        }
+
+        // Screen Flash
+        if (screenFlash > 0) {
+          ctx.save();
+          ctx.globalAlpha = screenFlash;
+          ctx.fillStyle = screenFlashColor;
+          ctx.fillRect(-30, -30, width + 60, height + 60);
+          ctx.restore();
+        }
+
+        ctx.restore();
+
+        // UI Layer (drawn unshaken for crisp readability)
+        if (gameState === STATE.PLAYING) {
+          drawHUD();
+        } else if (gameState === STATE.MENU) {
+          drawMenuOverlay();
+        } else if (gameState === STATE.GAMEOVER) {
+          drawHUD();
+          drawGameOverOverlay();
+        }
+      }
+
+      function drawGrid() {
+        const size = 56;
+        ctx.save();
+        ctx.strokeStyle = COLORS.grid;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let x = 0; x < width; x += size) {
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, height);
+        }
+        for (let y = 0; y < height; y += size) {
+          ctx.moveTo(0, y);
+          ctx.lineTo(width, y);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      function drawProjectile(p) {
+        const c = COLORS[p.polarity];
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.shadowBlur = 16;
+        ctx.shadowColor = c.main;
+
+        if (p.polarity === POLARITY.CYAN) {
+          // Glowing Cyan Orb with crisp inner core
+          ctx.beginPath();
+          ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
+          ctx.fillStyle = c.main;
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(0, 0, p.radius * 0.45, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+        } else {
+          // Sharp Magenta Diamond for instant color + shape recognition
+          const r = p.radius * 1.15;
+          ctx.beginPath();
+          ctx.moveTo(0, -r);
+          ctx.lineTo(r, 0);
+          ctx.lineTo(0, r);
+          ctx.lineTo(-r, 0);
+          ctx.closePath();
+          ctx.fillStyle = c.main;
+          ctx.fill();
+
+          const ir = r * 0.44;
+          ctx.beginPath();
+          ctx.moveTo(0, -ir);
+          ctx.lineTo(ir, 0);
+          ctx.lineTo(0, ir);
+          ctx.lineTo(-ir, 0);
+          ctx.closePath();
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      function drawPlayer() {
+        const c = COLORS[player.polarity];
+
+        // Trail
+        for (const t of player.trail) {
+          const a = t.life / 0.22;
+          ctx.save();
+          ctx.globalAlpha = a * 0.35;
+          ctx.fillStyle = t.color;
+          ctx.beginPath();
+          ctx.arc(t.x, t.y, player.radius * a * 0.8, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // Invulnerability blink
+        if (player.invulnTimer > 0 && Math.floor(player.invulnTimer * 18) % 2 === 0) {
+          ctx.save();
+          ctx.globalAlpha = 0.42;
+        } else {
+          ctx.save();
+        }
+
+        ctx.translate(player.x, player.y);
+
+        // 5-Segment Orbital Overload Charge Ring around player
+        const ringRadius = player.radius + 11;
+        const segArc = (Math.PI * 2) / STREAK_TARGET;
+        const gap = 0.16;
+        for (let i = 0; i < STREAK_TARGET; i++) {
+          const startA = -Math.PI / 2 + i * segArc + gap / 2;
+          const endA = -Math.PI / 2 + (i + 1) * segArc - gap / 2;
+          ctx.beginPath();
+          ctx.arc(0, 0, ringRadius, startA, endA);
+          if (i < streak) {
+            ctx.strokeStyle = streak === 4 ? COLORS.gold : c.main;
+            ctx.lineWidth = 3.5;
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = streak === 4 ? COLORS.gold : c.main;
+          } else {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 0;
+          }
+          ctx.stroke();
+        }
+
+        // Player body
+        ctx.scale(player.scalePulse, player.scalePulse);
+        ctx.shadowBlur = 24;
+        ctx.shadowColor = c.main;
+
+        // Outer aura ring
+        ctx.beginPath();
+        ctx.arc(0, 0, player.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#0c0c16';
+        ctx.fill();
+        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = c.main;
+        ctx.stroke();
+
+        // Inner rotating polarity emblem
+        ctx.rotate(player.angle);
+        ctx.fillStyle = c.main;
+        if (player.polarity === POLARITY.CYAN) {
+          ctx.beginPath();
+          ctx.arc(0, 0, player.radius * 0.52, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          const r = player.radius * 0.6;
+          ctx.beginPath();
+          ctx.moveTo(0, -r);
+          ctx.lineTo(r, 0);
+          ctx.lineTo(0, r);
+          ctx.lineTo(-r, 0);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // Bright white center core
+        ctx.beginPath();
+        ctx.arc(0, 0, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      function drawHUD() {
+        const pad = 24;
+        const c = COLORS[player.polarity];
+
+        ctx.save();
+
+        // Top-Left: Score & High Score
+        ctx.textAlign = 'left';
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.font = '700 12px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText('SKOR', pad, pad + 10);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 32px "Segoe UI", system-ui, sans-serif';
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = c.glow;
+        ctx.fillText(score.toLocaleString('tr-TR'), pad, pad + 42);
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = 'rgba(255,255,255,0.48)';
+        ctx.font = '600 13px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText(`REKOR: ${Math.max(score, highScore).toLocaleString('tr-TR')}`, pad, pad + 64);
+
+        // Top-Center: Active Polarity & Overload Charge Bar
+        ctx.textAlign = 'center';
+        ctx.fillStyle = c.main;
+        ctx.font = '800 13px "Segoe UI", system-ui, sans-serif';
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = c.main;
+        ctx.fillText(c.name, width / 2, pad + 14);
+        ctx.shadowBlur = 0;
+
+        // 5 Charge pips
+        const pipW = 26;
+        const pipH = 7;
+        const pipGap = 6;
+        const totalW = STREAK_TARGET * pipW + (STREAK_TARGET - 1) * pipGap;
+        const startX = width / 2 - totalW / 2;
+        for (let i = 0; i < STREAK_TARGET; i++) {
+          const px = startX + i * (pipW + pipGap);
+          const py = pad + 24;
+          ctx.fillStyle = i < streak ? (streak === 4 ? COLORS.gold : c.main) : 'rgba(255,255,255,0.12)';
+          if (i < streak) {
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = streak === 4 ? COLORS.gold : c.main;
+          } else {
+            ctx.shadowBlur = 0;
+          }
+          ctx.beginPath();
+          ctx.roundRect(px, py, pipW, pipH, 3);
+          ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.font = '600 11px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText(`AŞIRI YÜKLEME (${streak}/5)`, width / 2, pad + 48);
+
+        // Top-Right: Combo & Lives
+        ctx.textAlign = 'right';
+        ctx.fillStyle = combo > 1 ? COLORS.gold : 'rgba(255,255,255,0.75)';
+        ctx.font = '900 28px "Segoe UI", system-ui, sans-serif';
+        if (combo > 1) {
+          ctx.shadowBlur = 12;
+          ctx.shadowColor = 'rgba(255, 214, 10, 0.5)';
+        }
+        ctx.fillText(`${combo}x KOMBO`, width - pad, pad + 34);
+        ctx.shadowBlur = 0;
+
+        // Combo decay bar
+        if (combo > 1) {
+          const barW = 130;
+          const barH = 4;
+          const ratio = Math.max(0, comboTimer / COMBO_DURATION);
+          ctx.fillStyle = 'rgba(255,255,255,0.12)';
+          ctx.fillRect(width - pad - barW, pad + 43, barW, barH);
+          ctx.fillStyle = COLORS.gold;
+          ctx.fillRect(width - pad - barW * ratio, pad + 43, barW * ratio, barH);
+        }
+
+        // Lives (3 diamond cores)
+        for (let i = 0; i < MAX_LIVES; i++) {
+          const lx = width - pad - 10 - i * 26;
+          const ly = pad + 64;
+          const alive = i < lives;
+          ctx.save();
+          ctx.translate(lx, ly);
+          ctx.beginPath();
+          ctx.moveTo(0, -8);
+          ctx.lineTo(8, 0);
+          ctx.lineTo(0, 8);
+          ctx.lineTo(-8, 0);
+          ctx.closePath();
+          if (alive) {
+            ctx.fillStyle = '#ff2a55';
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#ff2a55';
+            ctx.fill();
+          } else {
+            ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+
+        // Bottom subtle control reminder
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(255,255,255,0.32)';
+        ctx.font = '600 12px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText('[WASD / YÖN TUŞLARI] HAREKET   •   [SPACE] RENK DEĞİŞTİR', width / 2, height - 16);
+
+        // Big Overload Banner
+        if (overloadTextTimer > 0) {
+          ctx.globalAlpha = Math.min(1, overloadTextTimer * 1.5);
+          ctx.fillStyle = COLORS.gold;
+          ctx.font = '900 26px "Segoe UI", system-ui, sans-serif';
+          ctx.shadowBlur = 20;
+          ctx.shadowColor = COLORS.gold;
+          ctx.fillText('⚡ AŞIRI YÜKLEME PATLAMASI ⚡', width / 2, pad + 88);
+        }
+
+        ctx.restore();
+      }
+
+      function drawMenuOverlay() {
+        ctx.save();
+
+        // Darken backdrop
+        ctx.fillStyle = 'rgba(6, 6, 11, 0.72)';
+        ctx.fillRect(0, 0, width, height);
+
+        const cx = width / 2;
+        const cy = height / 2;
+
+        // Dual Title
+        ctx.textAlign = 'center';
+        ctx.font = '900 54px "Segoe UI", system-ui, sans-serif';
+
+        ctx.fillStyle = COLORS[POLARITY.CYAN].main;
+        ctx.shadowBlur = 26;
+        ctx.shadowColor = COLORS[POLARITY.CYAN].main;
+        ctx.fillText('DUAL', cx - 122, cy - 125);
+
+        ctx.fillStyle = COLORS[POLARITY.MAGENTA].main;
+        ctx.shadowColor = COLORS[POLARITY.MAGENTA].main;
+        ctx.fillText('POLARITY', cx + 76, cy - 125);
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = 'rgba(240, 244, 255, 0.72)';
+        ctx.font = '600 15px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText('ÇİFT KUTUP ARCADE', cx, cy - 90);
+
+        // Info Card
+        const cardW = Math.min(540, width - 40);
+        const cardH = 195;
+        ctx.fillStyle = 'rgba(15, 17, 30, 0.85)';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.roundRect(cx - cardW / 2, cy - 60, cardW, cardH, 14);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '700 15px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText('KENDİ RENGİNİ YUT  •  ZIT RENGİNDEN KAÇ', cx, cy - 26);
+
+        ctx.fillStyle = 'rgba(220, 228, 255, 0.78)';
+        ctx.font = '500 13.5px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText('• Aynı renkten peş peşe 5 tane yutunca AŞIRI YÜKLEME patlar!', cx, cy + 6);
+        ctx.fillText('• Patlama dalgası ekrandaki tüm tehlikeleri puana çevirir.', cx, cy + 30);
+
+        ctx.fillStyle = COLORS[POLARITY.CYAN].main;
+        ctx.font = '700 13.5px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText('HAREKET: WASD veya Yön Tuşları', cx, cy + 68);
+
+        ctx.fillStyle = COLORS[POLARITY.MAGENTA].main;
+        ctx.fillText('KUTUP DEĞİŞTİR: SPACE', cx, cy + 92);
+
+        // Best records
+        ctx.fillStyle = 'rgba(255, 214, 10, 0.9)';
+        ctx.font = '700 14px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText(
+          `EN YÜKSEK SKOR: ${highScore.toLocaleString('tr-TR')}   |   EN İYİ KOMBO: ${bestCombo}x`,
+          cx,
+          cy + 165
+        );
+
+        // Blinking Start Prompt
+        const pulse = 0.55 + 0.45 * Math.sin(performance.now() * 0.005);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '800 18px "Segoe UI", system-ui, sans-serif';
+        ctx.shadowBlur = 14;
+        ctx.shadowColor = COLORS[POLARITY.CYAN].main;
+        ctx.fillText('BAŞLAMAK İÇİN [SPACE] VEYA [ENTER] TUŞUNA BAS', cx, cy + 215);
+
+        ctx.restore();
+      }
+
+      function drawGameOverOverlay() {
+        ctx.save();
+        ctx.fillStyle = 'rgba(6, 6, 11, 0.80)';
+        ctx.fillRect(0, 0, width, height);
+
+        const cx = width / 2;
+        const cy = height / 2;
+
+        ctx.textAlign = 'center';
+        ctx.fillStyle = COLORS[POLARITY.MAGENTA].main;
+        ctx.font = '900 46px "Segoe UI", system-ui, sans-serif';
+        ctx.shadowBlur = 24;
+        ctx.shadowColor = COLORS[POLARITY.MAGENTA].main;
+        ctx.fillText('SİSTEM ÇÖKTÜ', cx, cy - 115);
+        ctx.shadowBlur = 0;
+
+        const cardW = Math.min(460, width - 40);
+        const cardH = 190;
+        ctx.fillStyle = 'rgba(15, 17, 30, 0.9)';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.roundRect(cx - cardW / 2, cy - 82, cardW, cardH, 14);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = '700 13px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText('TOPLAM SKOR', cx, cy - 50);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 38px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText(score.toLocaleString('tr-TR'), cx, cy - 12);
+
+        if (isNewHighScore) {
+          ctx.fillStyle = COLORS.gold;
+          ctx.font = '800 13px "Segoe UI", system-ui, sans-serif';
+          ctx.fillText('★ YENİ REKOR! ★', cx, cy + 12);
+        } else {
+          ctx.fillStyle = 'rgba(255,255,255,0.5)';
+          ctx.font = '600 13px "Segoe UI", system-ui, sans-serif';
+          ctx.fillText(`EN YÜKSEK SKOR: ${highScore.toLocaleString('tr-TR')}`, cx, cy + 12);
+        }
+
+        ctx.fillStyle = COLORS[POLARITY.CYAN].main;
+        ctx.font = '800 16px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText(
+          `MAKSİMUM KOMBO: ${maxRunCombo}x ${isNewBestCombo ? '(YENİ REKOR!)' : `(REKOR: ${bestCombo}x)`}`,
+          cx,
+          cy + 58
+        );
+
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.font = '600 13px "Segoe UI", system-ui, sans-serif';
+        ctx.fillText(`HAYATTA KALMA SÜRESİ: ${elapsedTime.toFixed(1)} sn`, cx, cy + 86);
+
+        const pulse = 0.55 + 0.45 * Math.sin(performance.now() * 0.0055);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '800 17px "Segoe UI", system-ui, sans-serif';
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = COLORS[POLARITY.CYAN].main;
+        ctx.fillText('TEKRAR OYNAMAK İÇİN [SPACE] VEYA [ENTER]', cx, cy + 155);
+
+        ctx.restore();
+      }
+
+      // =========================================================
+      // MAIN ANIMATION LOOP
+      // =========================================================
+      let lastTime = performance.now();
+
+      function loop(now) {
+        const dt = Math.min((now - lastTime) / 1000, 0.05);
+        lastTime = now;
+
+        update(dt);
+        render();
+
+        requestAnimationFrame(loop);
+      }
+
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1434 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PARRY CORE — Zamanlamalı Arena</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #05060b;
+      color: #f4f7ff;
+      font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #game-wrap {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 100vw;
+      height: 100vh;
+      padding: 12px;
+    }
+
+    canvas {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+      aspect-ratio: 16 / 10;
+      border-radius: 10px;
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.12),
+        0 0 40px rgba(0, 210, 255, 0.12),
+        0 20px 60px rgba(0, 0, 0, 0.85);
+      background: #080a12;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-wrap">
+    <canvas id="game" width="960" height="600"></canvas>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+
+      const W = canvas.width;
+      const H = canvas.height;
+      const ARENA = { x: 28, y: 64, w: W - 56, h: H - 92 };
+      const STORAGE_KEY = 'parry_core_highscore_v1';
+
+      // =========================================================
+      // WEB AUDIO API - PROSEDÜREL SES MOTORU
+      // =========================================================
+      class SoundEngine {
+        constructor() {
+          this.ctx = null;
+          this.noiseBuffer = null;
+        }
+
+        init() {
+          if (!this.ctx) {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+            this.ctx = new AudioCtx();
+            this.noiseBuffer = this.createNoiseBuffer();
+          }
+          if (this.ctx && this.ctx.state === 'suspended') {
+            this.ctx.resume();
+          }
+        }
+
+        createNoiseBuffer() {
+          const length = this.ctx.sampleRate * 0.5;
+          const buffer = this.ctx.createBuffer(1, length, this.ctx.sampleRate);
+          const data = buffer.getChannelData(0);
+          for (let i = 0; i < length; i++) {
+            data[i] = Math.random() * 2 - 1;
+          }
+          return buffer;
+        }
+
+        playParry(tier) {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+
+          // 1. Tok alt frekans vuruş (Punchy Sub-Bass Thump)
+          const subOsc = this.ctx.createOscillator();
+          const subGain = this.ctx.createGain();
+          subOsc.type = 'sine';
+          subOsc.frequency.setValueAtTime(170 + Math.min(tier, 8) * 10, now);
+          subOsc.frequency.exponentialRampToValueAtTime(38, now + 0.16);
+
+          subGain.gain.setValueAtTime(0.65, now);
+          subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+
+          subOsc.connect(subGain);
+          subGain.connect(this.ctx.destination);
+          subOsc.start(now);
+          subOsc.stop(now + 0.19);
+
+          // 2. Metalik / Enerji Çınlaması
+          const clangOsc = this.ctx.createOscillator();
+          const clangGain = this.ctx.createGain();
+          clangOsc.type = 'triangle';
+          const baseFreq = 520 + Math.min(tier, 10) * 65;
+          clangOsc.frequency.setValueAtTime(baseFreq, now);
+          clangOsc.frequency.exponentialRampToValueAtTime(baseFreq * 1.45, now + 0.06);
+          clangOsc.frequency.exponentialRampToValueAtTime(baseFreq * 0.8, now + 0.22);
+
+          clangGain.gain.setValueAtTime(0.28, now);
+          clangGain.gain.exponentialRampToValueAtTime(0.001, now + 0.23);
+
+          clangOsc.connect(clangGain);
+          clangGain.connect(this.ctx.destination);
+          clangOsc.start(now);
+          clangOsc.stop(now + 0.24);
+
+          // 3. Keskin darbe transient'ı (Filtered Noise Click)
+          if (this.noiseBuffer) {
+            const noise = this.ctx.createBufferSource();
+            noise.buffer = this.noiseBuffer;
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = 'bandpass';
+            filter.frequency.setValueAtTime(2200, now);
+            filter.Q.value = 1.4;
+
+            const nGain = this.ctx.createGain();
+            nGain.gain.setValueAtTime(0.35, now);
+            nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+
+            noise.connect(filter);
+            filter.connect(nGain);
+            nGain.connect(this.ctx.destination);
+            noise.start(now);
+            noise.stop(now + 0.08);
+          }
+        }
+
+        playWhiff() {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(340, now);
+          osc.frequency.exponentialRampToValueAtTime(160, now + 0.08);
+          gain.gain.setValueAtTime(0.09, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.1);
+        }
+
+        playDash() {
+          if (!this.ctx || !this.noiseBuffer) return;
+          const now = this.ctx.currentTime;
+          const noise = this.ctx.createBufferSource();
+          noise.buffer = this.noiseBuffer;
+
+          const filter = this.ctx.createBiquadFilter();
+          filter.type = 'bandpass';
+          filter.frequency.setValueAtTime(1600, now);
+          filter.frequency.exponentialRampToValueAtTime(420, now + 0.12);
+          filter.Q.value = 2.0;
+
+          const gain = this.ctx.createGain();
+          gain.gain.setValueAtTime(0.22, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
+
+          noise.connect(filter);
+          filter.connect(gain);
+          gain.connect(this.ctx.destination);
+          noise.start(now);
+          noise.stop(now + 0.14);
+        }
+
+        playWallBounce(speedNorm) {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(110 + speedNorm * 60, now);
+          osc.frequency.exponentialRampToValueAtTime(45, now + 0.07);
+          gain.gain.setValueAtTime(0.12 + speedNorm * 0.1, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.085);
+        }
+
+        playEnemyDestroy(combo) {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sawtooth';
+          const freq = 260 + Math.min(combo, 12) * 45;
+          osc.frequency.setValueAtTime(freq, now);
+          osc.frequency.exponentialRampToValueAtTime(freq * 1.9, now + 0.09);
+
+          const filter = this.ctx.createBiquadFilter();
+          filter.type = 'lowpass';
+          filter.frequency.setValueAtTime(2400, now);
+
+          gain.gain.setValueAtTime(0.16, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+          osc.connect(filter);
+          filter.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.13);
+        }
+
+        playDeath() {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(220, now);
+          osc.frequency.exponentialRampToValueAtTime(32, now + 0.45);
+
+          gain.gain.setValueAtTime(0.35, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.48);
+
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.5);
+
+          if (this.noiseBuffer) {
+            const noise = this.ctx.createBufferSource();
+            noise.buffer = this.noiseBuffer;
+            const nGain = this.ctx.createGain();
+            nGain.gain.setValueAtTime(0.28, now);
+            nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+            noise.connect(nGain);
+            nGain.connect(this.ctx.destination);
+            noise.start(now);
+            noise.stop(now + 0.32);
+          }
+        }
+
+        playStart() {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+          [330, 440, 660].forEach((freq, idx) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            const t = now + idx * 0.055;
+            osc.frequency.setValueAtTime(freq, t);
+            gain.gain.setValueAtTime(0.14, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(t);
+            osc.stop(t + 0.19);
+          });
+        }
+      }
+
+      const sound = new SoundEngine();
+
+      // =========================================================
+      // YARDIMCI FONKSİYONLAR VE SKOR KAYDI
+      // =========================================================
+      function loadHighScore() {
+        try {
+          const val = localStorage.getItem(STORAGE_KEY);
+          return val ? Math.max(0, parseInt(val, 10) || 0) : 0;
+        } catch {
+          return 0;
+        }
+      }
+
+      function saveHighScore(score) {
+        try {
+          localStorage.setItem(STORAGE_KEY, String(Math.floor(score)));
+        } catch {
+          // Depolama erişilemezse sessizce geç
+        }
+      }
+
+      function clamp(v, min, max) {
+        return Math.max(min, Math.min(max, v));
+      }
+
+      function lerp(a, b, t) {
+        return a + (b - a) * t;
+      }
+
+      function dist(x1, y1, x2, y2) {
+        return Math.hypot(x2 - x1, y2 - y1);
+      }
+
+      // =========================================================
+      // OYUN DURUMU VE GİRDİ YÖNETİMİ
+      // =========================================================
+      const keys = new Set();
+      let gameState = 'TITLE'; // 'TITLE' | 'PLAYING' | 'GAMEOVER'
+      let highScore = loadHighScore();
+      let isNewRecord = false;
+
+      const player = {
+        x: W / 2,
+        y: H / 2 + 80,
+        vx: 0,
+        vy: 0,
+        radius: 13,
+        speed: 315,
+        facingX: 0,
+        facingY: -1,
+        parryActiveTimer: 0,
+        parryCooldown: 0,
+        parryUsedHit: false,
+        dashTimer: 0,
+        dashCooldown: 0,
+        dashDirX: 0,
+        dashDirY: 0,
+        invulnTimer: 0,
+        afterimages: []
+      };
+
+      const ball = {
+        x: W / 2,
+        y: ARENA.y + 110,
+        vx: 240,
+        vy: 190,
+        baseSpeed: 290,
+        speed: 290,
+        baseRadius: 12,
+        radius: 12,
+        parryCount: 0,
+        damageTier: 1,
+        trail: [],
+        spin: 0,
+        justParriedTimer: 0
+      };
+
+      let enemies = [];
+      let particles = [];
+      let shockwaves = [];
+      let floatingTexts = [];
+
+      let score = 0;
+      let enemiesDestroyed = 0;
+      let maxParryStreak = 0;
+      let spawnTimer = 1.0;
+      let elapsedTime = 0;
+      let killCombo = 0;
+      let killComboTimer = 0;
+
+      // Görsel Efekt Zamanlayıcıları
+      let hitStopTimer = 0;
+      let flashAlpha = 0;
+      let flashColor = '#ffffff';
+      let shakeIntensity = 0;
+      let deathReason = '';
+
+      function resetGame() {
+        sound.init();
+        sound.playStart();
+
+        player.x = ARENA.x + ARENA.w * 0.5;
+        player.y = ARENA.y + ARENA.h * 0.68;
+        player.vx = 0;
+        player.vy = 0;
+        player.facingX = 0;
+        player.facingY = -1;
+        player.parryActiveTimer = 0;
+        player.parryCooldown = 0;
+        player.parryUsedHit = false;
+        player.dashTimer = 0;
+        player.dashCooldown = 0;
+        player.invulnTimer = 0.6;
+        player.afterimages = [];
+
+        const angle = (Math.random() * 0.6 + 0.2) * Math.PI * (Math.random() < 0.5 ? 1 : -1);
+        ball.x = ARENA.x + ARENA.w * 0.5;
+        ball.y = ARENA.y + ARENA.h * 0.24;
+        ball.baseSpeed = 300;
+        ball.speed = 300;
+        ball.vx = Math.cos(angle) * ball.speed;
+        ball.vy = Math.abs(Math.sin(angle)) * ball.speed * 0.8 + 80;
+        const norm = Math.hypot(ball.vx, ball.vy);
+        ball.vx = (ball.vx / norm) * ball.speed;
+        ball.vy = (ball.vy / norm) * ball.speed;
+        ball.radius = ball.baseRadius;
+        ball.parryCount = 0;
+        ball.damageTier = 1;
+        ball.trail = [];
+        ball.justParriedTimer = 0;
+
+        enemies = [];
+        particles = [];
+        shockwaves = [];
+        floatingTexts = [];
+
+        score = 0;
+        enemiesDestroyed = 0;
+        maxParryStreak = 0;
+        spawnTimer = 0.7;
+        elapsedTime = 0;
+        killCombo = 0;
+        killComboTimer = 0;
+        isNewRecord = false;
+        deathReason = '';
+
+        hitStopTimer = 0;
+        flashAlpha = 0.18;
+        flashColor = '#38e8ff';
+        shakeIntensity = 0;
+
+        // Başlangıçta 2 düşman doğur
+        spawnEnemy();
+        spawnEnemy();
+
+        gameState = 'PLAYING';
+      }
+
+      // =========================================================
+      // KLAVYE KONTROLLERİ
+      // =========================================================
+      window.addEventListener('keydown', (e) => {
+        if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+          e.preventDefault();
+        }
+
+        sound.init();
+
+        if (e.code === 'Enter') {
+          if (gameState === 'TITLE' || gameState === 'GAMEOVER') {
+            resetGame();
+            return;
+          }
+        }
+
+        if (gameState !== 'PLAYING') return;
+
+        if (!e.repeat) {
+          if (e.code === 'Space') {
+            triggerParry();
+          } else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+            triggerDash();
+          }
+        }
+
+        keys.add(e.code);
+      });
+
+      window.addEventListener('keyup', (e) => {
+        keys.delete(e.code);
+      });
+
+      window.addEventListener('blur', () => {
+        keys.clear();
+      });
+
+      function getMoveInput() {
+        let dx = 0;
+        let dy = 0;
+        if (keys.has('ArrowLeft') || keys.has('KeyA')) dx -= 1;
+        if (keys.has('ArrowRight') || keys.has('KeyD')) dx += 1;
+        if (keys.has('ArrowUp') || keys.has('KeyW')) dy -= 1;
+        if (keys.has('ArrowDown') || keys.has('KeyS')) dy += 1;
+        const len = Math.hypot(dx, dy);
+        if (len > 0) {
+          dx /= len;
+          dy /= len;
+        }
+        return { dx, dy, active: len > 0 };
+      }
+
+      function triggerParry() {
+        if (player.parryCooldown > 0 || player.parryActiveTimer > 0) return;
+        player.parryActiveTimer = 0.16; // 160ms aktif karşılama penceresi
+        player.parryCooldown = 0.36;    // Spamlamayı önleyen kısa bekleme
+        player.parryUsedHit = false;
+
+        // Görsel enerji halkası
+        shockwaves.push({
+          x: player.x,
+          y: player.y,
+          radius: player.radius + 4,
+          maxRadius: player.radius + ball.radius + 36,
+          alpha: 0.75,
+          color: '#4ef2ff',
+          lineWidth: 3
+        });
+
+        // İlk anda menzil içindeyse anında kontrol edilecek; değilse whif sesi biraz gecikmeli veya hafif duyulur
+        sound.playWhiff();
+      }
+
+      function triggerDash() {
+        if (player.dashCooldown > 0 || player.dashTimer > 0) return;
+        const move = getMoveInput();
+        const dirX = move.active ? move.dx : player.facingX;
+        const dirY = move.active ? move.dy : player.facingY;
+        const len = Math.hypot(dirX, dirY) || 1;
+
+        player.dashDirX = dirX / len;
+        player.dashDirY = dirY / len;
+        player.dashTimer = 0.13;     // 130ms hızlı atılma
+        player.dashCooldown = 0.85;  // 0.85s bekleme
+        player.invulnTimer = Math.max(player.invulnTimer, 0.15); // Dash süresince hasar almaz
+
+        sound.playDash();
+        spawnParticles(player.x, player.y, '#38e8ff', 10, 180, 0.25);
+      }
+
+      // =========================================================
+      // TOP RENGİ VE SEVİYE HESAPLAMA (SARI -> KIRMIZI -> BEYAZ)
+      // =========================================================
+      function getBallAppearance() {
+        const p = ball.parryCount;
+        if (p <= 2) {
+          return {
+            core: '#ffe94d',
+            glow: '#ffae00',
+            trail: 'rgba(255, 200, 30, ',
+            label: 'SARI',
+            tierColor: '#ffe033'
+          };
+        } else if (p <= 5) {
+          return {
+            core: '#ff3b5c',
+            glow: '#ff002b',
+            trail: 'rgba(255, 35, 70, ',
+            label: 'KIRMIZI',
+            tierColor: '#ff3b5c'
+          };
+        } else {
+          return {
+            core: '#ffffff',
+            glow: '#9bf6ff',
+            trail: 'rgba(225, 250, 255, ',
+            label: 'BEYAZ AŞIRI YÜK',
+            tierColor: '#ffffff'
+          };
+        }
+      }
+
+      // =========================================================
+      // PARÇACIK & EFEKT YARDIMCILARI
+      // =========================================================
+      function spawnParticles(x, y, color, count, maxSpeed, life = 0.45, sizeBase = 3.5) {
+        for (let i = 0; i < count; i++) {
+          const ang = Math.random() * Math.PI * 2;
+          const spd = (0.2 + Math.random() * 0.8) * maxSpeed;
+          particles.push({
+            x,
+            y,
+            vx: Math.cos(ang) * spd,
+            vy: Math.sin(ang) * spd,
+            life,
+            maxLife: life,
+            color,
+            size: sizeBase * (0.6 + Math.random() * 0.9)
+          });
+        }
+      }
+
+      function addFloatingText(x, y, text, color, scale = 1) {
+        floatingTexts.push({
+          x,
+          y,
+          vy: -55,
+          text,
+          color,
+          life: 0.85,
+          maxLife: 0.85,
+          scale
+        });
+      }
+
+      // =========================================================
+      // DÜŞMAN SİSTEMİ
+      // =========================================================
+      function spawnEnemy() {
+        // Kenarlardan rastgele doğuş (oyuncudan güvenli uzaklıkta)
+        let x, y;
+        for (let attempt = 0; attempt < 15; attempt++) {
+          const edge = Math.floor(Math.random() * 4);
+          const margin = 30;
+          if (edge === 0) {
+            x = ARENA.x + margin + Math.random() * (ARENA.w - margin * 2);
+            y = ARENA.y + margin;
+          } else if (edge === 1) {
+            x = ARENA.x + ARENA.w - margin;
+            y = ARENA.y + margin + Math.random() * (ARENA.h - margin * 2);
+          } else if (edge === 2) {
+            x = ARENA.x + margin + Math.random() * (ARENA.w - margin * 2);
+            y = ARENA.y + ARENA.h - margin;
+          } else {
+            x = ARENA.x + margin;
+            y = ARENA.y + margin + Math.random() * (ARENA.h - margin * 2);
+          }
+          if (dist(x, y, player.x, player.y) > 150) break;
+        }
+
+        // Zamanla daha güçlü/hızlı düşman tipleri
+        const roll = Math.random();
+        const eliteChance = Math.min(0.4, elapsedTime / 90);
+        const isElite = roll < eliteChance;
+
+        enemies.push({
+          x,
+          y,
+          radius: isElite ? 17 : 13,
+          speed: isElite ? 128 + Math.min(60, elapsedTime * 0.7) : 92 + Math.min(75, elapsedTime * 0.9),
+          type: isElite ? 'elite' : 'grunt',
+          spawnTelegraph: 0.85, // Doğmadan önce uyarı halkası
+          angle: 0,
+          points: isElite ? 250 : 100
+        });
+      }
+
+      // =========================================================
+      // PARRY GERÇEKLEŞTİRME
+      // =========================================================
+      function executeParry() {
+        player.parryUsedHit = true;
+        player.parryActiveTimer = 0;
+        player.parryCooldown = 0.16; // Başarılı parry sonrası hızlı toparlanma!
+        player.invulnTimer = Math.max(player.invulnTimer, 0.16);
+
+        ball.parryCount += 1;
+        if (ball.parryCount > maxParryStreak) {
+          maxParryStreak = ball.parryCount;
+        }
+
+        // Hız, boyut ve hasar artışı
+        ball.speed = Math.min(1180, ball.baseSpeed + ball.parryCount * 78 + Math.pow(ball.parryCount, 1.25) * 8);
+        ball.radius = Math.min(28, ball.baseRadius + ball.parryCount * 1.45);
+        ball.damageTier = 1 + Math.floor(ball.parryCount * 0.75);
+        ball.justParriedTimer = 0.45;
+
+        // Yönlendirme: Topun oyuncudan çıkış vektörü + oyuncunun bastığı yönün birleşimi
+        const move = getMoveInput();
+        let outX = ball.x - player.x;
+        let outY = ball.y - player.y;
+        const outLen = Math.hypot(outX, outY) || 1;
+        outX /= outLen;
+        outY /= outLen;
+
+        let dirX = outX;
+        let dirY = outY;
+        if (move.active) {
+          // Oyuncunun hareket yönüne güçlü nişan desteği
+          dirX = move.dx * 0.72 + outX * 0.28;
+          dirY = move.dy * 0.72 + outY * 0.28;
+        }
+        const dLen = Math.hypot(dirX, dirY) || 1;
+        ball.vx = (dirX / dLen) * ball.speed;
+        ball.vy = (dirY / dLen) * ball.speed;
+
+        // Topu oyuncunun çarpışma alanının hemen dışına it (takılmayı önler)
+        const pushDist = player.radius + ball.radius + 6;
+        if (dist(player.x, player.y, ball.x, ball.y) < pushDist) {
+          ball.x = clamp(player.x + (dirX / dLen) * pushDist, ARENA.x + ball.radius, ARENA.x + ARENA.w - ball.radius);
+          ball.y = clamp(player.y + (dirY / dLen) * pushDist, ARENA.y + ball.radius, ARENA.y + ARENA.h - ball.radius);
+        }
+
+        // Parry Puanı
+        const parryBonus = 50 * ball.parryCount;
+        score += parryBonus;
+
+        // 50 milisaniyelik dramatik HIT-STOP, flaş, ekran sarsıntısı ve tok ses!
+        hitStopTimer = 0.05; // Tam 50 ms donma
+        const app = getBallAppearance();
+        flashAlpha = 0.45;
+        flashColor = app.tierColor;
+        shakeIntensity = Math.min(22, 9 + ball.parryCount * 1.5);
+
+        sound.playParry(ball.parryCount);
+
+        shockwaves.push({
+          x: ball.x,
+          y: ball.y,
+          radius: ball.radius,
+          maxRadius: 110 + ball.parryCount * 12,
+          alpha: 0.95,
+          color: app.tierColor,
+          lineWidth: 5
+        });
+
+        spawnParticles(ball.x, ball.y, app.tierColor, 26 + ball.parryCount * 3, 420 + ball.parryCount * 35, 0.5, 4.5);
+
+        const callout = ball.parryCount >= 6
+          ? `AŞIRI PARRY x${ball.parryCount}!`
+          : ball.parryCount >= 3
+            ? `SÜPER PARRY x${ball.parryCount}!`
+            : `PARRY! +${parryBonus}`;
+        addFloatingText(player.x, player.y - 26, callout, app.tierColor, ball.parryCount >= 3 ? 1.25 : 1.05);
+      }
+
+      // =========================================================
+      // ÖLÜM / OYUN SONU
+      // =========================================================
+      function triggerGameOver(reason) {
+        gameState = 'GAMEOVER';
+        deathReason = reason;
+        sound.playDeath();
+        flashAlpha = 0.55;
+        flashColor = '#ff2a4b';
+        shakeIntensity = 20;
+        spawnParticles(player.x, player.y, '#ff3b5c', 42, 360, 0.75, 5);
+        spawnParticles(player.x, player.y, '#ffffff', 18, 240, 0.5, 3);
+
+        if (score > highScore) {
+          highScore = score;
+          isNewRecord = true;
+          saveHighScore(highScore);
+        }
+      }
+
+      // =========================================================
+      // ANA GÜNCELLEME DÖNGÜSÜ
+      // =========================================================
+      function update(dt) {
+        // Flaş & Sarsıntı hit-stop sırasında bile akıcı söner
+        flashAlpha = Math.max(0, flashAlpha - dt * 2.8);
+        shakeIntensity = Math.max(0, shakeIntensity - dt * 55);
+
+        if (gameState !== 'PLAYING') {
+          updateEffectsOnly(dt);
+          return;
+        }
+
+        // 50ms Hit-Stop (Donma)
+        if (hitStopTimer > 0) {
+          hitStopTimer -= dt;
+          return;
+        }
+
+        elapsedTime += dt;
+
+        // Kombo zamanlayıcı
+        if (killComboTimer > 0) {
+          killComboTimer -= dt;
+          if (killComboTimer <= 0) killCombo = 0;
+        }
+
+        // Oyuncu zamanlayıcıları
+        player.parryCooldown = Math.max(0, player.parryCooldown - dt);
+        player.parryActiveTimer = Math.max(0, player.parryActiveTimer - dt);
+        player.dashCooldown = Math.max(0, player.dashCooldown - dt);
+        player.invulnTimer = Math.max(0, player.invulnTimer - dt);
+        ball.justParriedTimer = Math.max(0, ball.justParriedTimer - dt);
+
+        // Oyuncu hareketi
+        const move = getMoveInput();
+        if (move.active) {
+          player.facingX = move.dx;
+          player.facingY = move.dy;
+        }
+
+        if (player.dashTimer > 0) {
+          player.dashTimer -= dt;
+          const dashSpeed = 820;
+          player.vx = player.dashDirX * dashSpeed;
+          player.vy = player.dashDirY * dashSpeed;
+          player.afterimages.push({ x: player.x, y: player.y, alpha: 0.65 });
+        } else {
+          player.vx = move.dx * player.speed;
+          player.vy = move.dy * player.speed;
+        }
+
+        player.x += player.vx * dt;
+        player.y += player.vy * dt;
+
+        // Oyuncuyu arena sınırları içinde tut
+        player.x = clamp(player.x, ARENA.x + player.radius, ARENA.x + ARENA.w - player.radius);
+        player.y = clamp(player.y, ARENA.y + player.radius, ARENA.y + ARENA.h - player.radius);
+
+        // Afterimage söndürme
+        for (let i = player.afterimages.length - 1; i >= 0; i--) {
+          player.afterimages[i].alpha -= dt * 4.5;
+          if (player.afterimages[i].alpha <= 0) player.afterimages.splice(i, 1);
+        }
+
+        // ---------------------------------------------------------
+        // TOP HAREKETİ VE ALT-ADIMLI (SUB-STEPPED) ÇARPIŞMA
+        // Yüksek hızlarda topun duvarlardan/parry alanından geçmesini engeller
+        // ---------------------------------------------------------
+        const moveDist = ball.speed * dt;
+        const steps = Math.max(1, Math.ceil(moveDist / 4));
+        const subDt = dt / steps;
+        const app = getBallAppearance();
+
+        for (let s = 0; s < steps; s++) {
+          ball.x += ball.vx * subDt;
+          ball.y += ball.vy * subDt;
+
+          // Duvarlardan sekme
+          let bounced = false;
+          if (ball.x - ball.radius <= ARENA.x) {
+            ball.x = ARENA.x + ball.radius;
+            ball.vx = Math.abs(ball.vx);
+            bounced = true;
+          } else if (ball.x + ball.radius >= ARENA.x + ARENA.w) {
+            ball.x = ARENA.x + ARENA.w - ball.radius;
+            ball.vx = -Math.abs(ball.vx);
+            bounced = true;
+          }
+
+          if (ball.y - ball.radius <= ARENA.y) {
+            ball.y = ARENA.y + ball.radius;
+            ball.vy = Math.abs(ball.vy);
+            bounced = true;
+          } else if (ball.y + ball.radius >= ARENA.y + ARENA.h) {
+            ball.y = ARENA.y + ARENA.h - ball.radius;
+            ball.vy = -Math.abs(ball.vy);
+            bounced = true;
+          }
+
+          if (bounced) {
+            sound.playWallBounce(clamp((ball.speed - 300) / 800, 0, 1));
+            spawnParticles(ball.x, ball.y, app.tierColor, 6, 150, 0.25, 2.5);
+          }
+
+          // Top - Oyuncu Parry & Hasar Kontrolü
+          const dPlayer = dist(player.x, player.y, ball.x, ball.y);
+          const parryReach = player.radius + ball.radius + 32;
+
+          if (player.parryActiveTimer > 0 && !player.parryUsedHit && dPlayer <= parryReach) {
+            executeParry();
+            break; // Hit-stop devreye girdi, kalan alt-adımları kes
+          }
+
+          // Ölümcül top teması
+          if (player.invulnTimer <= 0 && dPlayer < player.radius + ball.radius - 3) {
+            triggerGameOver('Ölümcül enerji topuna yakalandın!');
+            return;
+          }
+
+          // Top - Düşman Çarpışması (Hızlanan top düşmanları parçalar!)
+          for (let i = enemies.length - 1; i >= 0; i--) {
+            const en = enemies[i];
+            if (en.spawnTelegraph > 0) continue;
+
+            if (dist(ball.x, ball.y, en.x, en.y) <= ball.radius + en.radius) {
+              // Düşmanı parçala!
+              killCombo += 1;
+              killComboTimer = 1.6;
+              const speedBonusMult = 1 + ball.parryCount * 0.65;
+              const comboMult = 1 + (killCombo - 1) * 0.25;
+              const gained = Math.round(en.points * speedBonusMult * comboMult);
+              score += gained;
+              enemiesDestroyed += 1;
+
+              sound.playEnemyDestroy(killCombo);
+              shakeIntensity = Math.max(shakeIntensity, 4 + Math.min(8, ball.parryCount));
+
+              const enemyColor = en.type === 'elite' ? '#c84dff' : '#00f0b5';
+              spawnParticles(en.x, en.y, enemyColor, 20, 320, 0.5, 4);
+              spawnParticles(en.x, en.y, app.tierColor, 10, 240, 0.35, 3);
+              shockwaves.push({
+                x: en.x,
+                y: en.y,
+                radius: en.radius,
+                maxRadius: 56 + ball.parryCount * 4,
+                alpha: 0.7,
+                color: enemyColor,
+                lineWidth: 2.5
+              });
+
+              const label = killCombo > 1 ? `+${gained} (x${killCombo})` : `+${gained}`;
+              addFloatingText(en.x, en.y - 10, label, '#ffe97a', killCombo > 2 ? 1.15 : 0.95);
+
+              enemies.splice(i, 1);
+            }
+          }
+        }
+
+        // Top izi
+        ball.spin += dt * (4 + ball.parryCount * 2);
+        ball.trail.push({ x: ball.x, y: ball.y, r: ball.radius, alpha: 0.8 });
+        if (ball.trail.length > 16 + ball.parryCount * 2) {
+          ball.trail.shift();
+        }
+        for (const t of ball.trail) {
+          t.alpha *= 0.88;
+        }
+
+        // Düşman doğma hızı (zamanla artan tempo)
+        spawnTimer -= dt;
+        const maxEnemies = Math.min(12, 4 + Math.floor(elapsedTime / 12));
+        if (spawnTimer <= 0) {
+          if (enemies.length < maxEnemies) {
+            spawnEnemy();
+          }
+          spawnTimer = Math.max(0.55, 1.85 - elapsedTime * 0.015);
+        }
+
+        // Düşman hareketi ve oyuncu teması
+        for (let i = enemies.length - 1; i >= 0; i--) {
+          const en = enemies[i];
+          if (en.spawnTelegraph > 0) {
+            en.spawnTelegraph -= dt;
+            continue;
+          }
+
+          const ang = Math.atan2(player.y - en.y, player.x - en.x);
+          en.x += Math.cos(ang) * en.speed * dt;
+          en.y += Math.sin(ang) * en.speed * dt;
+          en.angle += dt * (en.type === 'elite' ? 3.5 : 2.2);
+
+          if (player.invulnTimer <= 0 && dist(player.x, player.y, en.x, en.y) < player.radius + en.radius - 3) {
+            triggerGameOver('Bir arena avcısı tarafından yakalandın!');
+            return;
+          }
+        }
+
+        updateEffectsOnly(dt);
+      }
+
+      function updateEffectsOnly(dt) {
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.vx *= 0.93;
+          p.vy *= 0.93;
+          p.life -= dt;
+          if (p.life <= 0) particles.splice(i, 1);
+        }
+
+        for (let i = shockwaves.length - 1; i >= 0; i--) {
+          const sw = shockwaves[i];
+          sw.radius = lerp(sw.radius, sw.maxRadius, Math.min(1, dt * 15));
+          sw.alpha -= dt * 3.2;
+          if (sw.alpha <= 0) shockwaves.splice(i, 1);
+        }
+
+        for (let i = floatingTexts.length - 1; i >= 0; i--) {
+          const ft = floatingTexts[i];
+          ft.y += ft.vy * dt;
+          ft.vy *= 0.95;
+          ft.life -= dt;
+          if (ft.life <= 0) floatingTexts.splice(i, 1);
+        }
+      }
+
+      // =========================================================
+      // ÇİZİM (RENDER)
+      // =========================================================
+      function draw() {
+        ctx.save();
+
+        // Ekran sarsıntısı
+        if (shakeIntensity > 0.2) {
+          const sx = (Math.random() - 0.5) * shakeIntensity * 2;
+          const sy = (Math.random() - 0.5) * shakeIntensity * 2;
+          ctx.translate(sx, sy);
+        }
+
+        // Arka plan
+        ctx.fillStyle = '#070911';
+        ctx.fillRect(0, 0, W, H);
+
+        // Arena zemini & ızgara
+        drawArena();
+
+        if (gameState !== 'TITLE') {
+          drawShockwaves();
+          drawParticles();
+          drawEnemies();
+          drawBall();
+          drawPlayer();
+          drawFloatingTexts();
+        } else {
+          drawTitlePreview();
+        }
+
+        // Üst HUD Barı
+        drawHUD();
+
+        // Parlak Parry / Hasar Flaşı
+        if (flashAlpha > 0.005) {
+          ctx.fillStyle = flashColor;
+          ctx.globalAlpha = flashAlpha;
+          ctx.fillRect(0, 0, W, H);
+          ctx.globalAlpha = 1;
+        }
+
+        // Başlangıç / Bitiş Ekranları
+        if (gameState === 'TITLE') {
+          drawTitleOverlay();
+        } else if (gameState === 'GAMEOVER') {
+          drawGameOverOverlay();
+        }
+
+        ctx.restore();
+      }
+
+      function drawArena() {
+        // Arena iç dolgu
+        const grad = ctx.createRadialGradient(W / 2, H / 2, 60, W / 2, H / 2, 520);
+        grad.addColorStop(0, '#0d1222');
+        grad.addColorStop(1, '#070911');
+        ctx.fillStyle = grad;
+        ctx.fillRect(ARENA.x, ARENA.y, ARENA.w, ARENA.h);
+
+        // İnce neon ızgara
+        ctx.strokeStyle = 'rgba(78, 168, 255, 0.06)';
+        ctx.lineWidth = 1;
+        const gridSize = 48;
+        ctx.beginPath();
+        for (let gx = ARENA.x + gridSize; gx < ARENA.x + ARENA.w; gx += gridSize) {
+          ctx.moveTo(gx, ARENA.y);
+          ctx.lineTo(gx, ARENA.y + ARENA.h);
+        }
+        for (let gy = ARENA.y + gridSize; gy < ARENA.y + ARENA.h; gy += gridSize) {
+          ctx.moveTo(ARENA.x, gy);
+          ctx.lineTo(ARENA.x + ARENA.w, gy);
+        }
+        ctx.stroke();
+
+        // Arena çerçevesi (Top seviyesine göre parlar)
+        const app = getBallAppearance();
+        ctx.strokeStyle = gameState === 'PLAYING' ? app.tierColor : '#38e8ff';
+        ctx.globalAlpha = gameState === 'PLAYING' ? 0.45 + Math.min(0.45, ball.parryCount * 0.06) : 0.4;
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(ARENA.x, ARENA.y, ARENA.w, ARENA.h);
+        ctx.globalAlpha = 1;
+      }
+
+      function drawPlayer() {
+        // Dash gölgeleri
+        for (const img of player.afterimages) {
+          ctx.beginPath();
+          ctx.arc(img.x, img.y, player.radius, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(56, 232, 255, ${img.alpha * 0.45})`;
+          ctx.fill();
+        }
+
+        // Parry menzili rehber halkası (top yaklaştığında parlar)
+        const parryReach = player.radius + ball.radius + 32;
+        const d = dist(player.x, player.y, ball.x, ball.y);
+        if (d < parryReach + 55 && player.parryCooldown <= 0) {
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, parryReach, 0, Math.PI * 2);
+          ctx.strokeStyle = d <= parryReach ? 'rgba(255, 240, 80, 0.7)' : 'rgba(78, 242, 255, 0.22)';
+          ctx.setLineDash([6, 6]);
+          ctx.lineWidth = d <= parryReach ? 2.5 : 1.5;
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+
+        // Aktif Parry kalkan darbesi
+        if (player.parryActiveTimer > 0) {
+          ctx.beginPath();
+          ctx.arc(player.x, player.y, parryReach, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(78, 242, 255, 0.14)';
+          ctx.fill();
+          ctx.strokeStyle = '#7ef9ff';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+
+        // Oyuncu gövdesi
+        ctx.save();
+        ctx.translate(player.x, player.y);
+
+        if (player.invulnTimer > 0 && Math.floor(elapsedTime * 24) % 2 === 0) {
+          ctx.globalAlpha = 0.55;
+        }
+
+        ctx.shadowColor = '#38e8ff';
+        ctx.shadowBlur = 16;
+
+        ctx.beginPath();
+        ctx.arc(0, 0, player.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#0c1b2e';
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#38e8ff';
+        ctx.stroke();
+
+        // Yön göstergesi çekirdeği
+        ctx.beginPath();
+        ctx.arc(player.facingX * 5, player.facingY * 5, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        // Dash bekleme yayı (oyuncunun altında ince halka)
+        if (player.dashCooldown > 0) {
+          const pct = 1 - player.dashCooldown / 0.85;
+          ctx.shadowBlur = 0;
+          ctx.beginPath();
+          ctx.arc(0, 0, player.radius + 6, -Math.PI / 2, -Math.PI / 2 + pct * Math.PI * 2);
+          ctx.strokeStyle = 'rgba(56, 232, 255, 0.6)';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
+
+      function drawBall() {
+        const app = getBallAppearance();
+
+        // Hareket İzi
+        for (let i = 0; i < ball.trail.length; i++) {
+          const t = ball.trail[i];
+          const ratio = (i + 1) / ball.trail.length;
+          ctx.beginPath();
+          ctx.arc(t.x, t.y, t.r * ratio * 0.92, 0, Math.PI * 2);
+          ctx.fillStyle = `${app.trail}${(ratio * 0.38).toFixed(3)})`;
+          ctx.fill();
+        }
+
+        ctx.save();
+        ctx.translate(ball.x, ball.y);
+
+        // Dış enerji halesi
+        ctx.shadowColor = app.glow;
+        ctx.shadowBlur = 22 + ball.parryCount * 3;
+
+        // Dönen tehlike halkası
+        ctx.rotate(ball.spin);
+        ctx.beginPath();
+        ctx.arc(0, 0, ball.radius + 4, 0, Math.PI * 2);
+        ctx.strokeStyle = app.glow;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 6]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Ana Top Çekirdeği
+        const grad = ctx.createRadialGradient(-ball.radius * 0.25, -ball.radius * 0.25, 2, 0, 0, ball.radius);
+        grad.addColorStop(0, '#ffffff');
+        grad.addColorStop(0.45, app.core);
+        grad.addColorStop(1, app.glow);
+
+        ctx.beginPath();
+        ctx.arc(0, 0, ball.radius, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      function drawEnemies() {
+        for (const en of enemies) {
+          ctx.save();
+          ctx.translate(en.x, en.y);
+
+          if (en.spawnTelegraph > 0) {
+            const p = 1 - en.spawnTelegraph / 0.85;
+            ctx.beginPath();
+            ctx.arc(0, 0, en.radius * (1.8 - p * 0.8), 0, Math.PI * 2);
+            ctx.strokeStyle = en.type === 'elite' ? 'rgba(200, 77, 255, 0.7)' : 'rgba(0, 240, 181, 0.7)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.restore();
+            continue;
+          }
+
+          ctx.rotate(en.angle);
+          const color = en.type === 'elite' ? '#c84dff' : '#00f0b5';
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 12;
+
+          ctx.beginPath();
+          const sides = en.type === 'elite' ? 6 : 4;
+          for (let i = 0; i < sides; i++) {
+            const a = (i / sides) * Math.PI * 2;
+            const px = Math.cos(a) * en.radius;
+            const py = Math.sin(a) * en.radius;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          ctx.fillStyle = en.type === 'elite' ? '#250c38' : '#082924';
+          ctx.fill();
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = color;
+          ctx.stroke();
+
+          // İç çekirdek
+          ctx.beginPath();
+          ctx.arc(0, 0, 4, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.fill();
+
+          ctx.restore();
+        }
+      }
+
+      function drawParticles() {
+        for (const p of particles) {
+          const alpha = clamp(p.life / p.maxLife, 0, 1);
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function drawShockwaves() {
+        for (const sw of shockwaves) {
+          ctx.globalAlpha = clamp(sw.alpha, 0, 1);
+          ctx.strokeStyle = sw.color;
+          ctx.lineWidth = sw.lineWidth;
+          ctx.beginPath();
+          ctx.arc(sw.x, sw.y, sw.radius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function drawFloatingTexts() {
+        ctx.textAlign = 'center';
+        for (const ft of floatingTexts) {
+          const alpha = clamp(ft.life / ft.maxLife, 0, 1);
+          ctx.globalAlpha = alpha;
+          ctx.font = `800 ${Math.round(16 * ft.scale)}px "Segoe UI", sans-serif`;
+          ctx.fillStyle = ft.color;
+          ctx.shadowColor = 'rgba(0,0,0,0.8)';
+          ctx.shadowBlur = 6;
+          ctx.fillText(ft.text, ft.x, ft.y);
+          ctx.shadowBlur = 0;
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      function drawHUD() {
+        ctx.fillStyle = '#0b0e19';
+        ctx.fillRect(0, 0, W, ARENA.y - 6);
+
+        // Skor
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#8b9bb8';
+        ctx.font = '700 11px "Segoe UI", sans-serif';
+        ctx.fillText('SKOR', 28, 22);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '800 22px "Segoe UI", sans-serif';
+        ctx.fillText(score.toLocaleString('tr-TR'), 28, 46);
+
+        // En Yüksek Skor
+        ctx.fillStyle = '#8b9bb8';
+        ctx.font = '700 11px "Segoe UI", sans-serif';
+        ctx.fillText('REKOR', 190, 22);
+        ctx.fillStyle = '#ffe033';
+        ctx.font = '800 22px "Segoe UI", sans-serif';
+        ctx.fillText(Math.max(highScore, score).toLocaleString('tr-TR'), 190, 46);
+
+        // Top Seviyesi & Parry Sayacı (Orta)
+        const app = getBallAppearance();
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#8b9bb8';
+        ctx.font = '700 11px "Segoe UI", sans-serif';
+        ctx.fillText('TOP ENERJİSİ / PARRY SERİSİ', W / 2, 22);
+
+        ctx.fillStyle = app.tierColor;
+        ctx.font = '800 20px "Segoe UI", sans-serif';
+        ctx.fillText(
+          `${app.label}  •  x${ball.parryCount}  (${Math.round(ball.speed)} px/s)`,
+          W / 2,
+          45
+        );
+
+        // Sağ: Yetenek Durumları (PARRY / DASH)
+        ctx.textAlign = 'right';
+        const parryReady = player.parryCooldown <= 0;
+        const dashReady = player.dashCooldown <= 0;
+
+        ctx.font = '700 12px "Segoe UI", sans-serif';
+        ctx.fillStyle = parryReady ? '#4ef2ff' : '#4a556b';
+        ctx.fillText(parryReady ? '[SPACE] PARRY HAZIR' : '[SPACE] DOLUYOR...', W - 28, 26);
+
+        ctx.fillStyle = dashReady ? '#00f0b5' : '#4a556b';
+        ctx.fillText(dashReady ? '[SHIFT] DASH HAZIR' : '[SHIFT] DOLUYOR...', W - 28, 46);
+      }
+
+      function drawTitlePreview() {
+        // Arka planda canlı bir örnek enerji topu parıltısı
+        const t = performance.now() * 0.001;
+        const bx = W / 2 + Math.cos(t * 1.3) * 260;
+        const by = H / 2 + Math.sin(t * 1.9) * 140;
+        ctx.beginPath();
+        ctx.arc(bx, by, 14, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffe033';
+        ctx.shadowColor = '#ffae00';
+        ctx.shadowBlur = 26;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      function drawTitleOverlay() {
+        ctx.fillStyle = 'rgba(6, 8, 16, 0.78)';
+        ctx.fillRect(ARENA.x, ARENA.y, ARENA.w, ARENA.h);
+
+        ctx.textAlign = 'center';
+        ctx.shadowColor = '#38e8ff';
+        ctx.shadowBlur = 24;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 54px "Segoe UI", sans-serif';
+        ctx.fillText('PARRY CORE', W / 2, H / 2 - 105);
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = '#ffe033';
+        ctx.font = '700 17px "Segoe UI", sans-serif';
+        ctx.fillText('ÖLÜMCÜL TOPU KARŞILA, HIZLANDIR VE ARENAYI PARÇALA', W / 2, H / 2 - 68);
+
+        // Kontroller kutusu
+        const boxW = 620;
+        const boxH = 158;
+        const boxX = W / 2 - boxW / 2;
+        const boxY = H / 2 - 36;
+        ctx.fillStyle = 'rgba(16, 22, 40, 0.9)';
+        ctx.strokeStyle = 'rgba(78, 242, 255, 0.28)';
+        ctx.lineWidth = 1.5;
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+        ctx.font = '600 15px "Segoe UI", sans-serif';
+        ctx.fillStyle = '#d8e4ff';
+        ctx.fillText('YÖN TUŞLARI / WASD : Hareket & Parry Yönlendirme', W / 2, boxY + 34);
+        ctx.fillStyle = '#4ef2ff';
+        ctx.fillText('SPACE : Zamanlamalı Enerji Karşılama (PARRY)', W / 2, boxY + 66);
+        ctx.fillStyle = '#00f0b5';
+        ctx.fillText('SHIFT : Kısa Süreli Atılma (DASH — Kaçış)', W / 2, boxY + 98);
+        ctx.fillStyle = '#ff9854';
+        ctx.font = '500 13px "Segoe UI", sans-serif';
+        ctx.fillText('Her Parry topu büyütür, hızlandırır (Sarı → Kırmızı → Beyaz) ve çarpanını artırır!', W / 2, boxY + 134);
+
+        // Başlama çağrısı
+        const pulse = 0.65 + 0.35 * Math.sin(performance.now() * 0.005);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '800 22px "Segoe UI", sans-serif';
+        ctx.fillText('BAŞLAMAK İÇİN [ ENTER ] TUŞUNA BAS', W / 2, H / 2 + 178);
+        ctx.globalAlpha = 1;
+      }
+
+      function drawGameOverOverlay() {
+        ctx.fillStyle = 'rgba(7, 8, 15, 0.82)';
+        ctx.fillRect(ARENA.x, ARENA.y, ARENA.w, ARENA.h);
+
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ff3b5c';
+        ctx.shadowColor = '#ff0033';
+        ctx.shadowBlur = 20;
+        ctx.font = '900 46px "Segoe UI", sans-serif';
+        ctx.fillText('ELENDİN!', W / 2, H / 2 - 110);
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = '#b4c2dc';
+        ctx.font = '600 16px "Segoe UI", sans-serif';
+        ctx.fillText(deathReason, W / 2, H / 2 - 74);
+
+        if (isNewRecord) {
+          ctx.fillStyle = '#ffe033';
+          ctx.font = '800 20px "Segoe UI", sans-serif';
+          ctx.fillText('★ YENİ YÜKSEK SKOR! ★', W / 2, H / 2 - 36);
+        }
+
+        // İstatistikler
+        const boxW = 460;
+        const boxH = 128;
+        const boxX = W / 2 - boxW / 2;
+        const boxY = H / 2 - 16;
+        ctx.fillStyle = 'rgba(16, 22, 40, 0.92)';
+        ctx.strokeStyle = 'rgba(255, 59, 92, 0.35)';
+        ctx.lineWidth = 1.5;
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+        ctx.font = '700 17px "Segoe UI", sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(`SKOR: ${score.toLocaleString('tr-TR')}   |   REKOR: ${highScore.toLocaleString('tr-TR')}`, W / 2, boxY + 38);
+
+        ctx.fillStyle = '#4ef2ff';
+        ctx.font = '600 15px "Segoe UI", sans-serif';
+        ctx.fillText(`En Yüksek Parry Serisi: x${maxParryStreak}`, W / 2, boxY + 72);
+
+        ctx.fillStyle = '#00f0b5';
+        ctx.fillText(`Parçalanan Düşman: ${enemiesDestroyed}`, W / 2, boxY + 102);
+
+        const pulse = 0.65 + 0.35 * Math.sin(performance.now() * 0.005);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '800 21px "Segoe UI", sans-serif';
+        ctx.fillText('TEKRAR OYNAMAK İÇİN [ ENTER ]', W / 2, H / 2 + 166);
+        ctx.globalAlpha = 1;
+      }
+
+      // =========================================================
+      // ANA ANİMASYON DÖNGÜSÜ
+      // =========================================================
+      let lastTime = performance.now();
+      function loop(now) {
+        const rawDt = (now - lastTime) / 1000;
+        lastTime = now;
+        const dt = Math.min(rawDt, 0.05);
+
+        update(dt);
+        draw();
+
+        requestAnimationFrame(loop);
+      }
+
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1424 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>İKİZ LAZER BAĞI // Tether Slash</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #05060b;
+      font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #eef6ff;
+      cursor: none;
+      pointer-events: none;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <script>
+    (() => {
+      'use strict';
+
+      // ==========================================
+      // CANVAS & KURULUM
+      // ==========================================
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d', { alpha: false });
+
+      let W = 1280;
+      let H = 720;
+      let dpr = 1;
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        W = window.innerWidth;
+        H = window.innerHeight;
+        canvas.width = Math.floor(W * dpr);
+        canvas.height = Math.floor(H * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      window.addEventListener('resize', resize);
+      resize();
+
+      // ==========================================
+      // LOCALSTORAGE SKOR KAYDI
+      // ==========================================
+      const STORAGE_KEY = 'ikiz_lazer_bagi_highscore_v1';
+      function loadHighScore() {
+        try {
+          const val = parseInt(localStorage.getItem(STORAGE_KEY) || '0', 10);
+          return Number.isFinite(val) ? val : 0;
+        } catch {
+          return 0;
+        }
+      }
+      function saveHighScore(val) {
+        try {
+          localStorage.setItem(STORAGE_KEY, String(Math.floor(val)));
+        } catch {
+          // Sandbox ortamında sessizce yoksay
+        }
+      }
+
+      // ==========================================
+      // WEB AUDIO API PROSEDÜREL SES MOTORU
+      // ==========================================
+      class SoundEngine {
+        constructor() {
+          this.ctx = null;
+          this.muted = false;
+          this.noiseBuffer = null;
+          this.lastWhipTime = 0;
+        }
+
+        init() {
+          if (!this.ctx) {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+            this.ctx = new AudioCtx();
+            this._createNoiseBuffer();
+          }
+          if (this.ctx.state === 'suspended') {
+            this.ctx.resume().catch(() => {});
+          }
+        }
+
+        _createNoiseBuffer() {
+          if (!this.ctx) return;
+          const sr = this.ctx.sampleRate;
+          const len = Math.floor(sr * 0.4);
+          const buf = this.ctx.createBuffer(1, len, sr);
+          const data = buf.getChannelData(0);
+          for (let i = 0; i < len; i++) {
+            data[i] = Math.random() * 2 - 1;
+          }
+          this.noiseBuffer = buf;
+        }
+
+        toggleMute() {
+          this.muted = !this.muted;
+          return this.muted;
+        }
+
+        playStart() {
+          if (this.muted || !this.ctx) return;
+          const now = this.ctx.currentTime;
+          const notes = [330, 440, 554.37, 659.25];
+          notes.forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(freq, now + i * 0.055);
+            gain.gain.setValueAtTime(0.001, now + i * 0.055);
+            gain.gain.exponentialRampToValueAtTime(0.14, now + i * 0.055 + 0.015);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.055 + 0.2);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(now + i * 0.055);
+            osc.stop(now + i * 0.055 + 0.22);
+          });
+        }
+
+        playSlice(combo, isWhip) {
+          if (this.muted || !this.ctx) return;
+          const now = this.ctx.currentTime;
+          const pitchBoost = Math.min(combo, 18) * 28;
+
+          // Lazer kesme vuruşu
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = isWhip ? 'sawtooth' : 'triangle';
+          osc.frequency.setValueAtTime(640 + pitchBoost, now);
+          osc.frequency.exponentialRampToValueAtTime(110 + pitchBoost * 0.2, now + 0.11);
+
+          gain.gain.setValueAtTime(0.16, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.13);
+
+          // Patlama çıtırtısı (Filtreli gürültü)
+          if (this.noiseBuffer) {
+            const src = this.ctx.createBufferSource();
+            src.buffer = this.noiseBuffer;
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = 'bandpass';
+            filter.frequency.setValueAtTime(1800 + pitchBoost * 2, now);
+            filter.Q.value = 1.8;
+
+            const nGain = this.ctx.createGain();
+            nGain.gain.setValueAtTime(0.15, now);
+            nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+            src.connect(filter);
+            filter.connect(nGain);
+            nGain.connect(this.ctx.destination);
+            src.start(now);
+            src.stop(now + 0.11);
+          }
+        }
+
+        playMultiKill(count) {
+          if (this.muted || !this.ctx) return;
+          const now = this.ctx.currentTime;
+
+          // Derin sub-bass darbesi
+          const sub = this.ctx.createOscillator();
+          const sGain = this.ctx.createGain();
+          sub.type = 'sine';
+          sub.frequency.setValueAtTime(140, now);
+          sub.frequency.exponentialRampToValueAtTime(38, now + 0.25);
+          sGain.gain.setValueAtTime(0.28, now);
+          sGain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+          sub.connect(sGain);
+          sGain.connect(this.ctx.destination);
+          sub.start(now);
+          sub.stop(now + 0.27);
+
+          // Kombo akoru
+          const base = 523.25 * Math.pow(1.06, Math.min(count, 8));
+          [base, base * 1.25].forEach((f) => {
+            const osc = this.ctx.createOscillator();
+            const g = this.ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(f, now);
+            g.gain.setValueAtTime(0.1, now);
+            g.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+            osc.connect(g);
+            g.connect(this.ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.24);
+          });
+        }
+
+        playWhipWhoosh(speedRatio) {
+          if (this.muted || !this.ctx || !this.noiseBuffer) return;
+          const now = this.ctx.currentTime;
+          if (now - this.lastWhipTime < 0.24) return;
+          this.lastWhipTime = now;
+
+          const src = this.ctx.createBufferSource();
+          src.buffer = this.noiseBuffer;
+
+          const filter = this.ctx.createBiquadFilter();
+          filter.type = 'bandpass';
+          filter.frequency.setValueAtTime(350, now);
+          filter.frequency.exponentialRampToValueAtTime(1400 * speedRatio, now + 0.12);
+          filter.Q.value = 3.0;
+
+          const gain = this.ctx.createGain();
+          gain.gain.setValueAtTime(0.001, now);
+          gain.gain.linearRampToValueAtTime(0.07, now + 0.04);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+
+          src.connect(filter);
+          filter.connect(gain);
+          gain.connect(this.ctx.destination);
+          src.start(now);
+          src.stop(now + 0.17);
+        }
+
+        playDamage() {
+          if (this.muted || !this.ctx) return;
+          const now = this.ctx.currentTime;
+
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(190, now);
+          osc.frequency.linearRampToValueAtTime(55, now + 0.3);
+
+          gain.gain.setValueAtTime(0.24, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(now);
+          osc.stop(now + 0.33);
+        }
+
+        playGameOver() {
+          if (this.muted || !this.ctx) return;
+          const now = this.ctx.currentTime;
+          const notes = [440, 370, 293.66, 220];
+          notes.forEach((f, i) => {
+            const osc = this.ctx.createOscillator();
+            const g = this.ctx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(f, now + i * 0.09);
+            g.gain.setValueAtTime(0.12, now + i * 0.09);
+            g.gain.exponentialRampToValueAtTime(0.001, now + i * 0.09 + 0.25);
+            osc.connect(g);
+            g.connect(this.ctx.destination);
+            osc.start(now + i * 0.09);
+            osc.stop(now + i * 0.09 + 0.27);
+          });
+        }
+      }
+
+      const sound = new SoundEngine();
+
+      // ==========================================
+      // KLAVYE GİRDİSİ (SADECE KLAVYE)
+      // ==========================================
+      const keys = new Set();
+      const BLOCKED_KEYS = new Set([
+        'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'
+      ]);
+
+      window.addEventListener('keydown', (e) => {
+        if (BLOCKED_KEYS.has(e.code)) {
+          e.preventDefault();
+        }
+        sound.init();
+        keys.add(e.code);
+
+        if (e.code === 'KeyM' && !e.repeat) {
+          sound.toggleMute();
+        }
+
+        if ((e.code === 'Space' || e.code === 'Enter') && !e.repeat) {
+          if (state.mode === 'menu' || state.mode === 'gameover') {
+            startGame();
+          }
+        }
+      });
+
+      window.addEventListener('keyup', (e) => {
+        keys.delete(e.code);
+      });
+
+      window.addEventListener('blur', () => {
+        keys.clear();
+      });
+
+      // ==========================================
+      // YARDIMCI MATEMATİK FONKSİYONLARI
+      // ==========================================
+      function clamp(v, min, max) {
+        return v < min ? min : v > max ? max : v;
+      }
+
+      function distPointToSegment(px, py, ax, ay, bx, by) {
+        const abx = bx - ax;
+        const aby = by - ay;
+        const lenSq = abx * abx + aby * aby;
+        if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+        let t = ((px - ax) * abx + (py - ay) * aby) / lenSq;
+        t = clamp(t, 0, 1);
+        const cx = ax + t * abx;
+        const cy = ay + t * aby;
+        return Math.hypot(px - cx, py - cy);
+      }
+
+      function randRange(min, max) {
+        return min + Math.random() * (max - min);
+      }
+
+      // ==========================================
+      // OYUN DURUMU VE FİZİK SABİTLERİ
+      // ==========================================
+      const ARENA_PAD = 24;
+      const CORE_RADIUS = 13;
+      const TETHER_REST_LEN = 135;
+      const TETHER_MAX_LEN = 300;
+
+      const state = {
+        mode: 'menu', // 'menu' | 'playing' | 'gameover'
+        score: 0,
+        highScore: loadHighScore(),
+        isNewRecord: false,
+        lives: 3,
+        maxLives: 3,
+        invulnTimer: 0,
+        elapsed: 0,
+        kills: 0,
+
+        // Kombo & Kırbaç sistemi
+        combo: 0,
+        maxCombo: 0,
+        comboTimer: 0,
+        comboDuration: 2.4,
+        swingKillCount: 0,
+        swingWindowTimer: 0,
+
+        // Hit-stop (15ms) ve Ekran Sarsıntısı
+        hitStopTimer: 0,
+        shakePower: 0,
+        flashAlpha: 0,
+        flashColor: '#ffffff',
+
+        // Birinci Çekirdek (Oyuncu)
+        c1: { x: 0, y: 0, vx: 0, vy: 0, trail: [] },
+        // İkinci Çekirdek (Yay Fiziği)
+        c2: { x: 0, y: 0, vx: 0, vy: 0, trail: [] },
+
+        tetherSpeed: 0,
+        tetherTension: 0,
+
+        enemies: [],
+        spawns: [],
+        halves: [],
+        particles: [],
+        popups: [],
+
+        spawnCooldown: 0.6
+      };
+
+      function resetEntities() {
+        const cx = W * 0.5;
+        const cy = H * 0.5;
+        state.c1 = { x: cx + 60, y: cy, vx: 0, vy: 0, trail: [] };
+        state.c2 = { x: cx - 75, y: cy, vx: 0, vy: 0, trail: [] };
+        state.enemies = [];
+        state.spawns = [];
+        state.halves = [];
+        state.particles = [];
+        state.popups = [];
+        state.tetherSpeed = 0;
+        state.tetherTension = 0;
+      }
+
+      function startGame() {
+        state.mode = 'playing';
+        state.score = 0;
+        state.isNewRecord = false;
+        state.lives = state.maxLives;
+        state.invulnTimer = 1.2;
+        state.elapsed = 0;
+        state.kills = 0;
+        state.combo = 0;
+        state.maxCombo = 0;
+        state.comboTimer = 0;
+        state.swingKillCount = 0;
+        state.swingWindowTimer = 0;
+        state.hitStopTimer = 0;
+        state.shakePower = 0;
+        state.flashAlpha = 0;
+        state.spawnCooldown = 0.4;
+        resetEntities();
+        sound.playStart();
+
+        // Başlangıç dalgası
+        spawnWave(3);
+      }
+
+      // ==========================================
+      // DÜŞMAN OLUŞTURMA
+      // ==========================================
+      const ENEMY_TYPES = {
+        chaser: {
+          radius: 17,
+          speed: 125,
+          color: '#ff3355',
+          points: 100,
+          sides: 4
+        },
+        dasher: {
+          radius: 15,
+          speed: 225,
+          color: '#ffaa00',
+          points: 160,
+          sides: 3
+        },
+        swarmer: {
+          radius: 11,
+          speed: 175,
+          color: '#d946ef',
+          points: 80,
+          sides: 5
+        },
+        heavy: {
+          radius: 25,
+          speed: 82,
+          color: '#8b5cf6',
+          points: 250,
+          sides: 6
+        }
+      };
+
+      function getSafeSpawnPos() {
+        for (let attempt = 0; attempt < 25; attempt++) {
+          const x = randRange(ARENA_PAD + 40, W - ARENA_PAD - 40);
+          const y = randRange(ARENA_PAD + 40, H - ARENA_PAD - 40);
+          const d1 = Math.hypot(x - state.c1.x, y - state.c1.y);
+          const d2 = Math.hypot(x - state.c2.x, y - state.c2.y);
+          if (d1 > 190 && d2 > 190) {
+            return { x, y };
+          }
+        }
+        // Yedek köşe konumu
+        return {
+          x: state.c1.x < W * 0.5 ? W - 80 : 80,
+          y: state.c1.y < H * 0.5 ? H - 80 : 80
+        };
+      }
+
+      function queueEnemy(typeKey, customPos = null) {
+        const pos = customPos || getSafeSpawnPos();
+        const cfg = ENEMY_TYPES[typeKey];
+        state.spawns.push({
+          x: clamp(pos.x, ARENA_PAD + 30, W - ARENA_PAD - 30),
+          y: clamp(pos.y, ARENA_PAD + 30, H - ARENA_PAD - 30),
+          type: typeKey,
+          color: cfg.color,
+          radius: cfg.radius,
+          timer: 0.85,
+          maxTimer: 0.85
+        });
+      }
+
+      function spawnWave(count) {
+        const diff = Math.min(state.elapsed / 60, 1.5);
+        for (let i = 0; i < count; i++) {
+          const roll = Math.random();
+          if (state.elapsed > 18 && roll < 0.18) {
+            // Sürü kümesi (tek hamlede biçmek için ideal!)
+            const center = getSafeSpawnPos();
+            const pack = 3 + Math.floor(Math.random() * 3);
+            for (let j = 0; j < pack; j++) {
+              const ang = (j / pack) * Math.PI * 2;
+              queueEnemy('swarmer', {
+                x: center.x + Math.cos(ang) * 34,
+                y: center.y + Math.sin(ang) * 34
+              });
+            }
+          } else if (state.elapsed > 26 && roll < 0.34) {
+            queueEnemy('heavy');
+          } else if (state.elapsed > 10 && roll < 0.58 + diff * 0.1) {
+            queueEnemy('dasher');
+          } else {
+            queueEnemy('chaser');
+          }
+        }
+      }
+
+      // ==========================================
+      // EFEKT VE PARÇACIK YARDIMCILARI
+      // ==========================================
+      function spawnParticles(x, y, color, count, speedMin = 60, speedMax = 280) {
+        for (let i = 0; i < count; i++) {
+          const ang = Math.random() * Math.PI * 2;
+          const spd = randRange(speedMin, speedMax);
+          state.particles.push({
+            x,
+            y,
+            vx: Math.cos(ang) * spd,
+            vy: Math.sin(ang) * spd,
+            life: randRange(0.25, 0.58),
+            maxLife: 0.58,
+            size: randRange(2, 4.5),
+            color
+          });
+        }
+      }
+
+      function spawnSlicedHalves(enemy, cutAngle) {
+        // Düşmanı lazerin kesme açısı boyunca tam ikiye böl!
+        const nx = -Math.sin(cutAngle);
+        const ny = Math.cos(cutAngle);
+        const push = 115 + state.tetherSpeed * 0.12;
+
+        [-1, 1].forEach((side) => {
+          state.halves.push({
+            x: enemy.x + nx * side * 4,
+            y: enemy.y + ny * side * 4,
+            vx: nx * side * push + enemy.vx * 0.3,
+            vy: ny * side * push + enemy.vy * 0.3,
+            angle: cutAngle,
+            rotSpeed: side * randRange(4.5, 9.5),
+            side,
+            radius: enemy.radius,
+            color: enemy.color,
+            life: 0.55,
+            maxLife: 0.55
+          });
+        });
+      }
+
+      function addPopup(x, y, text, color, scale = 1) {
+        state.popups.push({
+          x,
+          y,
+          vy: -55,
+          text,
+          color,
+          scale,
+          life: 0.85,
+          maxLife: 0.85
+        });
+      }
+
+      // ==========================================
+      // DÜŞMAN KESME & HASAR MANTIKLARI
+      // ==========================================
+      function sliceEnemy(index, cutAngle) {
+        const e = state.enemies[index];
+        state.enemies.splice(index, 1);
+
+        // Kombo ve kırbaç sayacı
+        state.kills++;
+        state.combo++;
+        if (state.combo > state.maxCombo) state.maxCombo = state.combo;
+        state.comboTimer = state.comboDuration;
+
+        if (state.swingWindowTimer > 0) {
+          state.swingKillCount++;
+        } else {
+          state.swingKillCount = 1;
+        }
+        state.swingWindowTimer = 0.16;
+
+        const isWhipFast = state.tetherSpeed > 440;
+        const mult = 1 + Math.floor((state.combo - 1) / 3) * 0.5;
+        const whipBonus = isWhipFast ? 1.5 : 1;
+        const gained = Math.round(e.points * mult * whipBonus);
+
+        state.score += gained;
+        if (state.score > state.highScore) {
+          state.highScore = state.score;
+          state.isNewRecord = true;
+          saveHighScore(state.highScore);
+        }
+
+        // 15 milisaniyelik Hit-Stop ve Ekran Sarsıntısı
+        state.hitStopTimer = 0.015;
+        state.shakePower = Math.min(22, Math.max(state.shakePower, 7 + state.swingKillCount * 2.5));
+
+        // Görsel & Ses Efektleri
+        spawnSlicedHalves(e, cutAngle);
+        spawnParticles(e.x, e.y, e.color, 14, 90, 340);
+        spawnParticles(e.x, e.y, '#ffffff', 6, 120, 380);
+        sound.playSlice(state.combo, isWhipFast);
+
+        if (state.swingKillCount >= 2) {
+          // Çoklu biçme!
+          const bonusPts = state.swingKillCount * 75;
+          state.score += bonusPts;
+          if (state.score > state.highScore) {
+            state.highScore = state.score;
+            state.isNewRecord = true;
+            saveHighScore(state.highScore);
+          }
+          state.flashAlpha = 0.14;
+          state.flashColor = '#00f0ff';
+          addPopup(
+            e.x,
+            e.y - 18,
+            `KIRBAÇ x${state.swingKillCount}! +${gained + bonusPts}`,
+            '#00f0ff',
+            1.28
+          );
+          sound.playMultiKill(state.swingKillCount);
+        } else {
+          addPopup(
+            e.x,
+            e.y - 10,
+            isWhipFast ? `KIRBAÇ +${gained}` : `+${gained}`,
+            isWhipFast ? '#7df9ff' : '#ffffff',
+            isWhipFast ? 1.1 : 0.95
+          );
+        }
+      }
+
+      function damagePlayer(hitX, hitY) {
+        if (state.invulnTimer > 0 || state.mode !== 'playing') return;
+
+        state.lives--;
+        state.combo = 0;
+        state.comboTimer = 0;
+        state.invulnTimer = 1.6;
+        state.hitStopTimer = 0.04;
+        state.shakePower = 24;
+        state.flashAlpha = 0.35;
+        state.flashColor = '#ff2a55';
+
+        spawnParticles(hitX, hitY, '#ff2a55', 28, 100, 420);
+        sound.playDamage();
+
+        // Yakındaki düşmanları güvenli mesafeye it (adil kurtulma şansı)
+        for (const e of state.enemies) {
+          const dx = e.x - hitX;
+          const dy = e.y - hitY;
+          const d = Math.hypot(dx, dy) || 1;
+          if (d < 200) {
+            const push = (200 - d) * 3.2;
+            e.vx += (dx / d) * push;
+            e.vy += (dy / d) * push;
+          }
+        }
+
+        if (state.lives <= 0) {
+          state.mode = 'gameover';
+          sound.playGameOver();
+          spawnParticles(state.c1.x, state.c1.y, '#00f0ff', 35, 80, 450);
+          spawnParticles(state.c2.x, state.c2.y, '#ff2a85', 35, 80, 450);
+        }
+      }
+
+      // ==========================================
+      // FİZİK VE GÜNCELLEME DÖNGÜSÜ
+      // ==========================================
+      function updatePhysics(dt) {
+        state.elapsed += dt;
+        if (state.invulnTimer > 0) state.invulnTimer -= dt;
+        if (state.swingWindowTimer > 0) {
+          state.swingWindowTimer -= dt;
+          if (state.swingWindowTimer <= 0) state.swingKillCount = 0;
+        }
+        if (state.combo > 0) {
+          state.comboTimer -= dt;
+          if (state.comboTimer <= 0) {
+            state.combo = 0;
+          }
+        }
+
+        // Oyuncu Girdisi (WASD + Yön Tuşları)
+        let ix = 0;
+        let iy = 0;
+        if (keys.has('KeyA') || keys.has('ArrowLeft')) ix -= 1;
+        if (keys.has('KeyD') || keys.has('ArrowRight')) ix += 1;
+        if (keys.has('KeyW') || keys.has('ArrowUp')) iy -= 1;
+        if (keys.has('KeyS') || keys.has('ArrowDown')) iy += 1;
+
+        if (ix !== 0 && iy !== 0) {
+          const inv = 1 / Math.SQRT2;
+          ix *= inv;
+          iy *= inv;
+        }
+
+        // Hızlı kesme/tünelleme olmaması için 3 alt adım (sub-stepping)
+        const SUB_STEPS = 3;
+        const subDt = dt / SUB_STEPS;
+
+        const c1 = state.c1;
+        const c2 = state.c2;
+
+        const accel1 = 3100;
+        const damp1 = 6.2;
+        const damp2 = 2.55; // Düşük sönümleme = keskin dönüşlerde harika kırbaç salınımı!
+
+        for (let s = 0; s < SUB_STEPS; s++) {
+          // 1. Çekirdek hareketi
+          c1.vx += ix * accel1 * subDt;
+          c1.vy += iy * accel1 * subDt;
+          const d1Factor = Math.exp(-damp1 * subDt);
+          c1.vx *= d1Factor;
+          c1.vy *= d1Factor;
+
+          c1.x += c1.vx * subDt;
+          c1.y += c1.vy * subDt;
+
+          // Duvar sekmesi (Çekirdek 1)
+          const minX = ARENA_PAD + CORE_RADIUS;
+          const maxX = W - ARENA_PAD - CORE_RADIUS;
+          const minY = ARENA_PAD + CORE_RADIUS;
+          const maxY = H - ARENA_PAD - CORE_RADIUS;
+
+          if (c1.x < minX) { c1.x = minX; c1.vx = Math.abs(c1.vx) * 0.4; }
+          if (c1.x > maxX) { c1.x = maxX; c1.vx = -Math.abs(c1.vx) * 0.4; }
+          if (c1.y < minY) { c1.y = minY; c1.vy = Math.abs(c1.vy) * 0.4; }
+          if (c1.y > maxY) { c1.y = maxY; c1.vy = -Math.abs(c1.vy) * 0.4; }
+
+          // 2. Çekirdek Yay Fiziği
+          const dx = c1.x - c2.x;
+          const dy = c1.y - c2.y;
+          const dist = Math.hypot(dx, dy) || 0.001;
+          const ux = dx / dist;
+          const uy = dy / dist;
+
+          const stretch = dist - TETHER_REST_LEN;
+          let springForce = 0;
+          if (stretch > 0) {
+            springForce = stretch * 28; // Gergin çekim
+          } else {
+            springForce = stretch * 10; // Çok yaklaşırsa hafif itme (lazer açık kalsın)
+          }
+
+          c2.vx += ux * springForce * subDt;
+          c2.vy += uy * springForce * subDt;
+
+          const d2Factor = Math.exp(-damp2 * subDt);
+          c2.vx *= d2Factor;
+          c2.vy *= d2Factor;
+
+          c2.x += c2.vx * subDt;
+          c2.y += c2.vy * subDt;
+
+          // Maksimum gerginlik sınırı
+          const newDx = c1.x - c2.x;
+          const newDy = c1.y - c2.y;
+          const newDist = Math.hypot(newDx, newDy) || 0.001;
+          if (newDist > TETHER_MAX_LEN) {
+            const over = newDist - TETHER_MAX_LEN;
+            c2.x += (newDx / newDist) * over * 0.7;
+            c2.y += (newDy / newDist) * over * 0.7;
+          }
+
+          // Duvar sekmesi (Çekirdek 2)
+          if (c2.x < minX) { c2.x = minX; c2.vx = Math.abs(c2.vx) * 0.65; }
+          if (c2.x > maxX) { c2.x = maxX; c2.vx = -Math.abs(c2.vx) * 0.65; }
+          if (c2.y < minY) { c2.y = minY; c2.vy = Math.abs(c2.vy) * 0.65; }
+          if (c2.y > maxY) { c2.y = maxY; c2.vy = -Math.abs(c2.vy) * 0.65; }
+
+          state.tetherSpeed = Math.hypot(c2.vx - c1.vx * 0.3, c2.vy - c1.vy * 0.3);
+          state.tetherTension = clamp((newDist - TETHER_REST_LEN) / 140, 0, 1);
+
+          // Lazer Çarpışma Kontrolü (Alt adımda kontrol edilerek hız tünellemesi önlenir)
+          const cutAngle = Math.atan2(c2.y - c1.y, c2.x - c1.x);
+          for (let i = state.enemies.length - 1; i >= 0; i--) {
+            const e = state.enemies[i];
+            const dCore1 = Math.hypot(e.x - c1.x, e.y - c1.y);
+            const dCore2 = Math.hypot(e.x - c2.x, e.y - c2.y);
+
+            // Çekirdeğe değdi mi? (Biraz affedici çekirdek hitbox'ı)
+            if (dCore1 < e.radius + CORE_RADIUS * 0.78) {
+              damagePlayer(c1.x, c1.y);
+              continue;
+            }
+            if (dCore2 < e.radius + CORE_RADIUS * 0.78) {
+              damagePlayer(c2.x, c2.y);
+              continue;
+            }
+
+            // Lazer ipinden geçti mi?
+            const segDist = distPointToSegment(e.x, e.y, c1.x, c1.y, c2.x, c2.y);
+            if (segDist < e.radius + 4) {
+              sliceEnemy(i, cutAngle);
+            }
+          }
+        }
+
+        // Kırbaç vızlama sesi
+        if (state.tetherSpeed > 620) {
+          sound.playWhipWhoosh(clamp(state.tetherSpeed / 650, 1, 2));
+        }
+
+        // İz (Trail) kayıtları
+        c1.trail.push({ x: c1.x, y: c1.y });
+        if (c1.trail.length > 14) c1.trail.shift();
+        c2.trail.push({ x: c2.x, y: c2.y });
+        if (c2.trail.length > 20) c2.trail.shift();
+
+        // Düşman Doğma Zamanlayıcısı
+        state.spawnCooldown -= dt;
+        const maxEnemies = 6 + Math.min(22, Math.floor(state.elapsed / 5.5));
+        if (state.spawnCooldown <= 0 && state.enemies.length + state.spawns.length < maxEnemies) {
+          const waveSize = 1 + Math.floor(Math.min(3, state.elapsed / 25));
+          spawnWave(waveSize);
+          state.spawnCooldown = Math.max(0.75, 2.2 - state.elapsed * 0.022);
+        }
+
+        // Doğma Uyarıları (Telegraph)
+        for (let i = state.spawns.length - 1; i >= 0; i--) {
+          const sp = state.spawns[i];
+          sp.timer -= dt;
+          if (sp.timer <= 0) {
+            const cfg = ENEMY_TYPES[sp.type];
+            state.enemies.push({
+              x: sp.x,
+              y: sp.y,
+              vx: 0,
+              vy: 0,
+              type: sp.type,
+              radius: cfg.radius,
+              speed: cfg.speed * (1 + Math.min(0.45, state.elapsed * 0.004)),
+              color: cfg.color,
+              points: cfg.points,
+              sides: cfg.sides,
+              angle: Math.random() * Math.PI * 2,
+              dashTimer: randRange(0.8, 1.8)
+            });
+            spawnParticles(sp.x, sp.y, sp.color, 8, 40, 140);
+            state.spawns.splice(i, 1);
+          }
+        }
+
+        // Düşman Yapay Zekası ve Hareketi
+        for (const e of state.enemies) {
+          // En yakın çekirdeğe veya 1. çekirdeğe yönel
+          const d1 = Math.hypot(c1.x - e.x, c1.y - e.y);
+          const d2 = Math.hypot(c2.x - e.x, c2.y - e.y);
+          const target = (e.type === 'chaser' && d2 < d1 * 0.85) ? c2 : c1;
+
+          const tx = target.x - e.x;
+          const ty = target.y - e.y;
+          const td = Math.hypot(tx, ty) || 1;
+
+          if (e.type === 'dasher') {
+            e.dashTimer -= dt;
+            if (e.dashTimer <= 0) {
+              e.vx = (tx / td) * e.speed * 1.9;
+              e.vy = (ty / td) * e.speed * 1.9;
+              e.dashTimer = randRange(1.4, 2.1);
+            } else {
+              e.vx += ((tx / td) * e.speed * 0.55 - e.vx) * 2.5 * dt;
+              e.vy += ((ty / td) * e.speed * 0.55 - e.vy) * 2.5 * dt;
+            }
+            e.angle = Math.atan2(e.vy, e.vx);
+          } else {
+            e.vx += ((tx / td) * e.speed - e.vx) * 4.0 * dt;
+            e.vy += ((ty / td) * e.speed - e.vy) * 4.0 * dt;
+            e.angle += (e.type === 'heavy' ? 1.1 : 2.6) * dt;
+          }
+
+          e.x += e.vx * dt;
+          e.y += e.vy * dt;
+
+          // Duvar içinde tut
+          e.x = clamp(e.x, ARENA_PAD + e.radius, W - ARENA_PAD - e.radius);
+          e.y = clamp(e.y, ARENA_PAD + e.radius, H - ARENA_PAD - e.radius);
+        }
+      }
+
+      function updateVisualEffects(dt) {
+        if (state.shakePower > 0) {
+          state.shakePower = Math.max(0, state.shakePower - dt * 55);
+        }
+        if (state.flashAlpha > 0) {
+          state.flashAlpha = Math.max(0, state.flashAlpha - dt * 1.8);
+        }
+
+        // İkiye bölünmüş düşman parçaları
+        for (let i = state.halves.length - 1; i >= 0; i--) {
+          const h = state.halves[i];
+          h.life -= dt;
+          if (h.life <= 0) {
+            state.halves.splice(i, 1);
+            continue;
+          }
+          h.x += h.vx * dt;
+          h.y += h.vy * dt;
+          h.vx *= Math.exp(-3.5 * dt);
+          h.vy *= Math.exp(-3.5 * dt);
+          h.angle += h.rotSpeed * dt;
+        }
+
+        // Kıvılcımlar
+        for (let i = state.particles.length - 1; i >= 0; i--) {
+          const p = state.particles[i];
+          p.life -= dt;
+          if (p.life <= 0) {
+            state.particles.splice(i, 1);
+            continue;
+          }
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.vx *= Math.exp(-4.2 * dt);
+          p.vy *= Math.exp(-4.2 * dt);
+        }
+
+        // Skor yazıları
+        for (let i = state.popups.length - 1; i >= 0; i--) {
+          const pop = state.popups[i];
+          pop.life -= dt;
+          if (pop.life <= 0) {
+            state.popups.splice(i, 1);
+            continue;
+          }
+          pop.y += pop.vy * dt;
+          pop.vy *= Math.exp(-2.5 * dt);
+        }
+      }
+
+      // ==========================================
+      // ÇİZİM (RENDER)
+      // ==========================================
+      function drawGrid() {
+        const step = 64;
+        ctx.strokeStyle = 'rgba(35, 55, 95, 0.24)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let x = ARENA_PAD; x <= W - ARENA_PAD; x += step) {
+          ctx.moveTo(x, ARENA_PAD);
+          ctx.lineTo(x, H - ARENA_PAD);
+        }
+        for (let y = ARENA_PAD; y <= H - ARENA_PAD; y += step) {
+          ctx.moveTo(ARENA_PAD, y);
+          ctx.lineTo(W - ARENA_PAD, y);
+        }
+        ctx.stroke();
+
+        // Arena parlak çerçeve
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.35)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(ARENA_PAD, ARENA_PAD, W - ARENA_PAD * 2, H - ARENA_PAD * 2);
+      }
+
+      function drawPolygon(x, y, radius, sides, angle, color, lineWidth = 2.5) {
+        ctx.beginPath();
+        for (let i = 0; i < sides; i++) {
+          const a = angle + (i / sides) * Math.PI * 2;
+          const px = x + Math.cos(a) * radius;
+          const py = y + Math.sin(a) * radius;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fillStyle = color + '28';
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.stroke();
+      }
+
+      function drawTetherAndCores() {
+        const { c1, c2 } = state;
+        const speedNorm = clamp(state.tetherSpeed / 650, 0, 1);
+
+        // Hasar sonrası yanıp sönme
+        const blink = state.invulnTimer > 0 && Math.floor(state.invulnTimer * 18) % 2 === 0;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+
+        // İzler (Trails)
+        function drawTrail(trail, color, baseWidth) {
+          if (trail.length < 2) return;
+          for (let i = 1; i < trail.length; i++) {
+            const t = i / trail.length;
+            ctx.beginPath();
+            ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+            ctx.lineTo(trail[i].x, trail[i].y);
+            ctx.strokeStyle = color;
+            ctx.globalAlpha = t * 0.35;
+            ctx.lineWidth = baseWidth * t;
+            ctx.stroke();
+          }
+          ctx.globalAlpha = 1;
+        }
+        drawTrail(c1.trail, '#00f0ff', 10);
+        drawTrail(c2.trail, '#ff2a85', 11);
+
+        // LAZER BAĞI (İki çekirdek arası)
+        const grad = ctx.createLinearGradient(c1.x, c1.y, c2.x, c2.y);
+        grad.addColorStop(0, '#00f0ff');
+        grad.addColorStop(0.5, speedNorm > 0.55 ? '#ffffff' : '#a855f7');
+        grad.addColorStop(1, '#ff2a85');
+
+        // Dış parlama
+        ctx.beginPath();
+        ctx.moveTo(c1.x, c1.y);
+        ctx.lineTo(c2.x, c2.y);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 10 + speedNorm * 10;
+        ctx.globalAlpha = 0.28 + speedNorm * 0.25;
+        ctx.stroke();
+
+        // Orta ışın
+        ctx.beginPath();
+        ctx.moveTo(c1.x, c1.y);
+        ctx.lineTo(c2.x, c2.y);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 4 + speedNorm * 3.5;
+        ctx.globalAlpha = 0.9;
+        ctx.stroke();
+
+        // Yüksek enerjili beyaz çekirdek çizgisi (hafif elektrik titremeli)
+        ctx.beginPath();
+        ctx.moveTo(c1.x, c1.y);
+        const segs = 6;
+        for (let i = 1; i < segs; i++) {
+          const t = i / segs;
+          const jitter = (speedNorm * 5 + state.tetherTension * 3) * (Math.random() - 0.5);
+          const nx = -(c2.y - c1.y);
+          const ny = (c2.x - c1.x);
+          const nLen = Math.hypot(nx, ny) || 1;
+          ctx.lineTo(
+            c1.x + (c2.x - c1.x) * t + (nx / nLen) * jitter,
+            c1.y + (c2.y - c1.y) * t + (ny / nLen) * jitter
+          );
+        }
+        ctx.lineTo(c2.x, c2.y);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.8 + speedNorm * 1.5;
+        ctx.globalAlpha = 0.95;
+        ctx.stroke();
+
+        if (!blink) {
+          // 1. Çekirdek (Oyuncu - Mavi/Cyan)
+          drawCore(c1.x, c1.y, CORE_RADIUS, '#00f0ff', true);
+          // 2. Çekirdek (Uydu - Pembe/Magenta)
+          drawCore(c2.x, c2.y, CORE_RADIUS * (0.95 + speedNorm * 0.2), '#ff2a85', false);
+        }
+
+        ctx.restore();
+      }
+
+      function drawCore(x, y, r, color, isPrimary) {
+        // Dış hale
+        const glow = ctx.createRadialGradient(x, y, r * 0.2, x, y, r * 2.4);
+        glow.addColorStop(0, color);
+        glow.addColorStop(0.45, color + '55');
+        glow.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(x, y, r * 2.4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Dış halka
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // İç çekirdek
+        ctx.beginPath();
+        ctx.arc(x, y, r * 0.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        // Birinci çekirdek göstergesi
+        if (isPrimary) {
+          ctx.beginPath();
+          ctx.arc(x, y, r + 5, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(0, 240, 255, 0.35)';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+        }
+      }
+
+      function drawHUD() {
+        ctx.save();
+
+        // Sol Üst: Skor ve En Yüksek Skor
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = 'bold 12px "Segoe UI", sans-serif';
+        ctx.fillText('SKOR', ARENA_PAD + 14, ARENA_PAD + 24);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 30px "Segoe UI", sans-serif';
+        ctx.fillText(state.score.toLocaleString('tr-TR'), ARENA_PAD + 14, ARENA_PAD + 56);
+
+        ctx.fillStyle = state.isNewRecord ? '#fbbf24' : '#64748b';
+        ctx.font = 'bold 13px "Segoe UI", sans-serif';
+        ctx.fillText(
+          `EN YÜKSEK: ${state.highScore.toLocaleString('tr-TR')}`,
+          ARENA_PAD + 14,
+          ARENA_PAD + 78
+        );
+
+        // Orta Üst: Kombo Çarpanı
+        if (state.combo > 1) {
+          const cx = W * 0.5;
+          const mult = 1 + Math.floor((state.combo - 1) / 3) * 0.5;
+          const pct = clamp(state.comboTimer / state.comboDuration, 0, 1);
+
+          ctx.textAlign = 'center';
+          ctx.fillStyle = '#00f0ff';
+          ctx.font = '900 26px "Segoe UI", sans-serif';
+          ctx.fillText(`KOMBO ${state.combo}  (x${mult.toFixed(1)})`, cx, ARENA_PAD + 42);
+
+          const barW = 190;
+          ctx.fillStyle = 'rgba(255,255,255,0.12)';
+          ctx.fillRect(cx - barW / 2, ARENA_PAD + 52, barW, 5);
+          ctx.fillStyle = '#ff2a85';
+          ctx.fillRect(cx - barW / 2, ARENA_PAD + 52, barW * pct, 5);
+        }
+
+        // Sağ Üst: Kalkan (Can) & Ses Durumu
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = 'bold 12px "Segoe UI", sans-serif';
+        ctx.fillText('ÇEKİRDEK KALKANI', W - ARENA_PAD - 14, ARENA_PAD + 24);
+
+        for (let i = 0; i < state.maxLives; i++) {
+          const sx = W - ARENA_PAD - 24 - i * 28;
+          const sy = ARENA_PAD + 44;
+          const active = i < state.lives;
+          ctx.beginPath();
+          ctx.arc(sx, sy, 9, 0, Math.PI * 2);
+          ctx.fillStyle = active ? '#00f0ff' : 'rgba(255,255,255,0.08)';
+          ctx.fill();
+          ctx.strokeStyle = active ? '#ffffff' : 'rgba(255,255,255,0.2)';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
+        ctx.fillStyle = '#64748b';
+        ctx.font = 'bold 12px "Segoe UI", sans-serif';
+        ctx.fillText(
+          sound.muted ? '[M] SES: KAPALI' : '[M] SES: AÇIK',
+          W - ARENA_PAD - 14,
+          ARENA_PAD + 76
+        );
+
+        ctx.restore();
+      }
+
+      function drawMenuOverlay(nowSec) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(5, 6, 11, 0.76)';
+        ctx.fillRect(0, 0, W, H);
+
+        const cx = W * 0.5;
+        const cy = H * 0.5;
+
+        // Dekoratif dönen lazer önizlemesi
+        const r = 110;
+        const a = nowSec * 1.4;
+        const x1 = cx + Math.cos(a) * r;
+        const y1 = cy - 155 + Math.sin(a) * 28;
+        const x2 = cx - Math.cos(a) * r;
+        const y2 = cy - 155 - Math.sin(a) * 28;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = '#a855f7';
+        ctx.lineWidth = 5;
+        ctx.stroke();
+        drawCore(x1, y1, 10, '#00f0ff', true);
+        drawCore(x2, y2, 10, '#ff2a85', false);
+        ctx.restore();
+
+        ctx.textAlign = 'center';
+
+        // Başlık
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 54px "Segoe UI", sans-serif';
+        ctx.fillText('İKİZ LAZER BAĞI', cx, cy - 55);
+
+        ctx.fillStyle = '#00f0ff';
+        ctx.font = 'bold 16px "Segoe UI", sans-serif';
+        ctx.fillText('TETHER SLASH // FİZİK TABANLI ARCADE', cx, cy - 22);
+
+        // Kurallar Kutusu
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+        ctx.strokeStyle = 'rgba(0, 240, 255, 0.25)';
+        ctx.lineWidth = 1.5;
+        const boxW = Math.min(580, W - 40);
+        const boxH = 148;
+        ctx.fillRect(cx - boxW / 2, cy + 6, boxW, boxH);
+        ctx.strokeRect(cx - boxW / 2, cy + 6, boxW, boxH);
+
+        ctx.fillStyle = '#e2e8f0';
+        ctx.font = '600 15px "Segoe UI", sans-serif';
+        ctx.fillText('KONTROL: Sadece WASD veya YÖN TUŞLARI ile 1. çekirdeği yönet.', cx, cy + 38);
+        ctx.fillText('MEKANİK: 2. çekirdek yay fiziğiyle arkandan süzülür.', cx, cy + 66);
+        ctx.fillStyle = '#ff7eb6';
+        ctx.fillText('AMAÇ: Düşmanları çekirdeklere değdirmeden ARADAKİ LAZERLE ikiye böl!', cx, cy + 94);
+        ctx.fillStyle = '#7df9ff';
+        ctx.fillText('USTALIK: Keskin dönüşlerle kırbaç etkisi yarat ve çoklu kombo yap!', cx, cy + 122);
+
+        // En Yüksek Skor
+        if (state.highScore > 0) {
+          ctx.fillStyle = '#fbbf24';
+          ctx.font = 'bold 16px "Segoe UI", sans-serif';
+          ctx.fillText(`EN YÜKSEK SKOR: ${state.highScore.toLocaleString('tr-TR')}`, cx, cy + 185);
+        }
+
+        // Yanıp sönen başlama uyarısı
+        const pulse = 0.55 + 0.45 * Math.sin(nowSec * 5);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 20px "Segoe UI", sans-serif';
+        ctx.fillText('[ BAŞLAMAK İÇİN SPACE VEYA ENTER\'A BAS ]', cx, cy + 232);
+
+        ctx.restore();
+      }
+
+      function drawGameOverOverlay(nowSec) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(5, 6, 11, 0.8)';
+        ctx.fillRect(0, 0, W, H);
+
+        const cx = W * 0.5;
+        const cy = H * 0.5;
+
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ff2a55';
+        ctx.font = '900 54px "Segoe UI", sans-serif';
+        ctx.fillText('BAĞ KOPTU', cx, cy - 95);
+
+        if (state.isNewRecord) {
+          ctx.fillStyle = '#fbbf24';
+          ctx.font = '900 18px "Segoe UI", sans-serif';
+          ctx.fillText('★ YENİ EN YÜKSEK SKOR! ★', cx, cy - 55);
+        }
+
+        // İstatistikler
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '900 42px "Segoe UI", sans-serif';
+        ctx.fillText(state.score.toLocaleString('tr-TR'), cx, cy - 6);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = 'bold 15px "Segoe UI", sans-serif';
+        ctx.fillText(
+          `EN YÜKSEK: ${state.highScore.toLocaleString('tr-TR')}   •   BİÇİLEN: ${state.kills}   •   MAKS KOMBO: x${state.maxCombo}`,
+          cx,
+          cy + 34
+        );
+
+        const pulse = 0.55 + 0.45 * Math.sin(nowSec * 5);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle = '#00f0ff';
+        ctx.font = '900 20px "Segoe UI", sans-serif';
+        ctx.fillText('[ TEKRAR OYNAMAK İÇİN SPACE VEYA ENTER\'A BAS ]', cx, cy + 105);
+
+        ctx.restore();
+      }
+
+      function render(nowSec) {
+        // Arka plan
+        ctx.fillStyle = '#05060b';
+        ctx.fillRect(0, 0, W, H);
+
+        ctx.save();
+
+        // Ekran sarsıntısı
+        if (state.shakePower > 0.2) {
+          const sx = (Math.random() - 0.5) * state.shakePower;
+          const sy = (Math.random() - 0.5) * state.shakePower;
+          ctx.translate(sx, sy);
+        }
+
+        drawGrid();
+
+        // Doğma uyarı halkaları
+        for (const sp of state.spawns) {
+          const prog = 1 - sp.timer / sp.maxTimer;
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, sp.radius * (2.2 - prog * 1.2), 0, Math.PI * 2);
+          ctx.strokeStyle = sp.color;
+          ctx.globalAlpha = 0.25 + prog * 0.65;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Düşmanlar
+        for (const e of state.enemies) {
+          drawPolygon(e.x, e.y, e.radius, e.sides, e.angle, e.color, 2.5);
+          // Merkez nokta
+          ctx.beginPath();
+          ctx.arc(e.x, e.y, 3, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+        }
+
+        // İkiye bölünen düşman parçaları
+        for (const h of state.halves) {
+          const alpha = clamp(h.life / h.maxLife, 0, 1);
+          ctx.save();
+          ctx.translate(h.x, h.y);
+          ctx.rotate(h.angle);
+          ctx.globalAlpha = alpha;
+          ctx.beginPath();
+          if (h.side < 0) {
+            ctx.arc(0, 0, h.radius, 0, Math.PI);
+          } else {
+            ctx.arc(0, 0, h.radius, Math.PI, Math.PI * 2);
+          }
+          ctx.closePath();
+          ctx.fillStyle = h.color + '55';
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Kıvılcım parçacıkları
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        for (const p of state.particles) {
+          const alpha = clamp(p.life / p.maxLife, 0, 1);
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = p.color;
+          ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+        }
+        ctx.restore();
+
+        // Çekirdekler ve Lazer Bağı
+        if (state.mode === 'playing') {
+          drawTetherAndCores();
+        }
+
+        // Uçuşan skor/kombo yazıları
+        ctx.save();
+        ctx.textAlign = 'center';
+        for (const pop of state.popups) {
+          const alpha = clamp(pop.life / pop.maxLife, 0, 1);
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = pop.color;
+          ctx.font = `900 ${Math.round(16 * pop.scale)}px "Segoe UI", sans-serif`;
+          ctx.fillText(pop.text, pop.x, pop.y);
+        }
+        ctx.restore();
+
+        // Ekran darbe flaşı
+        if (state.flashAlpha > 0.01) {
+          ctx.fillStyle = state.flashColor;
+          ctx.globalAlpha = state.flashAlpha;
+          ctx.fillRect(0, 0, W, H);
+          ctx.globalAlpha = 1;
+        }
+
+        ctx.restore(); // Sarsıntı sonu
+
+        // Arayüz (HUD & Menüler)
+        if (state.mode === 'playing') {
+          drawHUD();
+        } else if (state.mode === 'menu') {
+          drawMenuOverlay(nowSec);
+        } else if (state.mode === 'gameover') {
+          drawGameOverOverlay(nowSec);
+        }
+      }
+
+      // ==========================================
+      // ANA DÖNGÜ (15ms HIT-STOP DESTEKLİ)
+      // ==========================================
+      let lastTime = performance.now();
+
+      function loop(now) {
+        const rawDt = Math.min((now - lastTime) / 1000, 0.05);
+        lastTime = now;
+
+        if (state.mode === 'playing') {
+          if (state.hitStopTimer > 0) {
+            // 15ms vuruş duraksaması: fizik donar, sarsıntı hissedilir
+            state.hitStopTimer -= rawDt;
+          } else {
+            updatePhysics(rawDt);
+          }
+        }
+
+        updateVisualEffects(rawDt);
+        render(now / 1000);
+        requestAnimationFrame(loop);
+      }
+
+      resetEntities();
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>
