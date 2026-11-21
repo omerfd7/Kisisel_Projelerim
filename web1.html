@@ -1,0 +1,95 @@
+<style>
+  .file-window {
+    width: 420px;
+    margin: 40px auto;
+    border: 1px solid #999;
+    font-family: Arial, sans-serif;
+  }
+
+  h3 {
+    text-align: center;
+    margin: 0;
+    padding: 12px;
+    border-bottom: 1px solid #999;
+  }
+
+  #files {
+    padding: 16px 24px;
+  }
+
+  #empty {
+    text-align: center;
+    padding: 24px;
+  }
+
+  .file-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 8px 0;
+  }
+
+  .buttons {
+    display: flex;
+    justify-content: space-around;
+    padding: 12px;
+    border-top: 1px solid #999;
+  }
+
+  button {
+    padding: 7px 10px;
+    cursor: pointer;
+  }
+</style>
+
+<div class="file-window">
+  <h3>Tüm Dosyalar</h3>
+
+  <ul id="files"></ul>
+  <p id="empty">Henüz dosya yok</p>
+
+  <div class="buttons">
+    <button onclick="addItem('Klasör')">+ Klasör oluştur</button>
+    <button onclick="addItem('Metin dosyası')">+ Metin dosyası</button>
+  </div>
+</div>
+
+<script>
+  const items = [];
+
+  function addItem(type) {
+    const name = prompt(`${type} adı:`);
+
+    if (name && name.trim()) {
+      items.push({ type, name: name.trim() });
+      render();
+    }
+  }
+
+  function deleteItem(index) {
+    items.splice(index, 1);
+    render();
+  }
+
+  function render() {
+    const list = document.getElementById("files");
+    list.innerHTML = "";
+
+    items.forEach((item, index) => {
+      const row = document.createElement("li");
+      row.className = "file-row";
+
+      const label = document.createElement("span");
+      label.textContent = `${item.type}: ${item.name}`;
+
+      const deleteButton = document.createElement("button");
+      deleteButton.textContent = "Dosya Sil";
+      deleteButton.onclick = () => deleteItem(index);
+
+      row.append(label, deleteButton);
+      list.appendChild(row);
+    });
+
+    document.getElementById("empty").hidden = items.length > 0;
+  }
+</script>

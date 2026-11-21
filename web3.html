@@ -1,0 +1,33 @@
+<div class="file-window">
+  <h3>Tüm dosyalar</h3>
+  <ul id="files"></ul>
+  <p id="empty">Henüz dosya yok</p>
+  <button onclick="addItem('Klasör')">+ Klasör oluştur</button>
+  <button onclick="addItem('Metin dosyası')">+ Metin dosyası</button>
+</div>
+
+<script>
+  const items = []; // Durum: oluşturulan öğeleri sakla
+
+  function addItem(type) {
+    const name = prompt(`${type} adı:`);
+
+    if (name) { // Koşul: ad girildiyse ekle
+      items.push({ type, name });
+      render();
+    }
+  }
+
+  function render() {
+    const list = document.getElementById("files");
+    list.innerHTML = "";
+
+    for (const item of items) { // Tekrar: her öğeyi ekranda göster
+      const row = document.createElement("li");
+      row.textContent = `${item.type}: ${item.name}`;
+      list.appendChild(row);
+    }
+
+    document.getElementById("empty").hidden = items.length > 0;
+  }
+</script>

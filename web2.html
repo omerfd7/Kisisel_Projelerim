@@ -1,0 +1,225 @@
+<style>
+  .file-window {
+    width: 480px;
+    margin: 40px auto;
+    border: 1px solid #999;
+    font-family: Arial, sans-serif;
+  }
+
+  h3 {
+    text-align: center;
+    margin: 0;
+    padding: 12px;
+    border-bottom: 1px solid #999;
+  }
+
+  #location {
+    padding: 10px 16px;
+    background: #f4f4f4;
+  }
+
+  #files {
+    padding: 8px 24px;
+  }
+
+  .file-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 10px 0;
+  }
+
+  .item-name {
+    flex: 1;
+  }
+
+  #empty {
+    text-align: center;
+    padding: 16px;
+  }
+
+  .buttons {
+    display: flex;
+    justify-content: space-around;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid #999;
+  }
+
+  button {
+    padding: 7px 10px;
+    cursor: pointer;
+  }
+</style>
+
+<div class="file-window">
+  <h3>Tüm Dosyalar</h3>
+
+  <div id="location"></div>
+  <ul id="files"></ul>
+  <p id="empty">Henüz dosya yok</p>
+
+  <div class="buttons">
+    <button onclick="goUp()">↑ Üst dizin</button>
+    <button onclick="addItem('folder')">+ Klasör oluştur</button>
+    <button onclick="addItem('text')">+ Metin dosyası</button>
+  </div>
+</div>
+
+<script>
+  const root = {
+    name: "Tüm Dosyalar",
+    type: "folder",
+    parent: null,
+    children: []
+  };
+
+  let currentFolder = root;
+
+  function addItem(type) {
+    const label = type === "folder" ? "Klasör" : "Metin dosyası";
+    const name = prompt(`${label} adı:`);
+
+    if (!name || !name.trim()) return;
+
+    currentFolder.children.push({
+      name: name.trim(),
+      type,
+      parent: currentFolder,
+      children: type === "folder" ? [] : undefined
+    });
+
+    render();
+  }
+
+  function enterFolder(item) {
+    if (item.type === "folder") {
+      currentFolder = item;
+      render();
+    }
+  }
+
+  function goUp() {
+    if (currentFolder.parent) {
+      currentFolder = currentFolder.parent;
+      render();
+    }
+  }
+
+  function getFolders(folder = root, result = []) {
+    result.push(folder);
+
+    for (const item of folder.children) {
+      if (item.type === "folder") {
+        getFolders(item, result);
+      }
+    }
+
+    return result;
+  }
+
+  function isInside(folder, possibleParent) {
+    let node = possibleParent;
+
+    while (node) {
+      if (node === folder) return true;
+      node = node.parent;
+    }
+
+    return false;
+  }
+
+  function moveItem(item) {
+    const folders = getFolders();
+    const choices = folders
+      .filter(folder => item.type !== "folder" || !isInside(item, folder))
+      .map((folder, index) => `${index}: ${folder.name}`)
+      .join("\n");
+
+    const validFolders = folders.filter(
+      folder => item.type !== "folder" || !isInside(item, folder)
+    );
+
+    const answer = prompt(
+      `Hedef klasörün numarasını yazın:\n${choices}\n\n0 ana dizindir.`
+    );
+
+    if (answer === null) return;
+
+    const target = validFolders[Number(answer)];
+    if (!target) {
+      alert("Bu numaralı klasör bulunamadı.");
+      return;
+    }
+
+    if (target === item.parent) {
+      alert("Bu öğe zaten o klasörde.");
+      return;
+    }
+
+    item.parent.children = item.parent.children.filter(child => child !== item);
+    item.parent = target;
+    target.children.push(item);
+
+    render();
+  }
+
+  function deleteItem(item) {
+    if (!confirm(`"${item.name}" silinsin mi?`)) return;
+
+    item.parent.children = item.parent.children.filter(child => child !== item);
+    render();
+  }
+
+  function render() {
+    document.getElementById("location").textContent =
+      `Bulunduğunuz yer: ${getPath(currentFolder)}`;
+
+    const list = document.getElementById("files");
+    list.innerHTML = "";
+
+    for (const item of currentFolder.children) {
+      const row = document.createElement("li");
+      row.className = "file-row";
+
+      const name = document.createElement("span");
+      name.className = "item-name";
+      name.textContent =
+        item.type === "folder" ? `📁 ${item.name}` : `📄 ${item.name}`;
+
+      if (item.type === "folder") {
+        name.style.cursor = "pointer";
+        name.onclick = () => enterFolder(item);
+        name.title = "Klasörü açmak için tıklayın";
+      }
+
+      const moveButton = document.createElement("button");
+      moveButton.textContent = "Taşı";
+      moveButton.onclick = () => moveItem(item);
+
+      const deleteButton = document.createElement("button");
+      deleteButton.textContent = "Sil";
+      deleteButton.onclick = () => deleteItem(item);
+
+      row.append(name, moveButton, deleteButton);
+      list.appendChild(row);
+    }
+
+    document.getElementById("empty").hidden =
+      currentFolder.children.length > 0;
+  }
+
+  function getPath(folder) {
+    const names = [];
+
+    while (folder) {
+      names.unshift(folder.name);
+      folder = folder.parent;
+    }
+
+    return names.join(" / ");
+  }
+
+  render();
+</script>
