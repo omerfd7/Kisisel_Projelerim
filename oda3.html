@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Küp Oda - 3D Görünüm</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body { overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1d22; color: #fff; }
+    #hud {
+      position: fixed; top: 14px; left: 14px; z-index: 10;
+      background: rgba(15, 18, 22, 0.78); backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 10px;
+      padding: 12px 15px; font-size: 12.5px; line-height: 1.55;
+    }
+    #hud b { color: #f4c48b; }
+    #buttons {
+      position: fixed; top: 14px; right: 14px; z-index: 10;
+      display: flex; gap: 8px;
+    }
+    button {
+      background: rgba(15, 18, 22, 0.82); color: #eee;
+      border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 8px;
+      padding: 8px 13px; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    button:hover, button.active {
+      background: #e5a967; color: #16181c; border-color: #f4c48b;
+    }
+  </style>
+</head>
+<body>
+
+<div id="hud">
+  <b>Küp Oda (4m x 4m x 4m)</b><br>
+  <b>W A S D:</b> Yürü &nbsp;|&nbsp; <b>Mouse Sürükle / Tıkla:</b> Etrafa Bak<br>
+  <b>M:</b> İçeriden Gez / Tepeden Bak &nbsp;|&nbsp; <b>T:</b> Tavanı Gizle/Göster
+</div>
+
+<div id="buttons">
+  <button id="btn-walk" class="active" onclick="setMode('walk')">İçeriden Gez</button>
+  <button id="btn-orbit" onclick="setMode('orbit')">Tepeden Bak (Maket)</button>
+  <button id="btn-roof" onclick="toggleRoof()">Tavan: Açık</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// 1. SAHNE VE RENDERER
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9ecae1);
+
+const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.08, 100);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// 2. BASİT MALZEMELER
+const mats = {
+  wall: new THREE.MeshStandardMaterial({ color: 0xf4f1ea, roughness: 0.88 }),
+  floor: new THREE.MeshStandardMaterial({ color: 0xc29568, roughness: 0.6 }),
+  woodDark: new THREE.MeshStandardMaterial({ color: 0x5b3f29, roughness: 0.65 }),
+  woodLight: new THREE.MeshStandardMaterial({ color: 0xd9b589, roughness: 0.6 }),
+  mattress: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 }),
+  blanket: new THREE.MeshStandardMaterial({ color: 0x4c6b8a, roughness: 0.9 }),
+  pillow: new THREE.MeshStandardMaterial({ color: 0xeae6df, roughness: 0.9 }),
+  metal: new THREE.MeshStandardMaterial({ color: 0x22262b, roughness: 0.4, metalness: 0.6 }),
+  chairSeat: new THREE.MeshStandardMaterial({ color: 0x393e46, roughness: 0.8 }),
+  door: new THREE.MeshStandardMaterial({ color: 0x7c5335, roughness: 0.6 }),
+  handle: new THREE.MeshStandardMaterial({ color: 0xd4af37, roughness: 0.25, metalness: 0.85 }),
+  screen: new THREE.MeshStandardMaterial({ color: 0x162230, emissive: 0x2b507a, emissiveIntensity: 0.6 }),
+  grass: new THREE.MeshStandardMaterial({ color: 0x5c8a47, roughness: 0.95 })
+};
+
+function addBox(w, h, d, x, floorY, z, mat, parent = scene, cast = true, receive = true) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  mesh.position.set(x, floorY + h / 2, z);
+  mesh.castShadow = cast;
+  mesh.receiveShadow = receive;
+  parent.add(mesh);
+  return mesh;
+}
+
+// 3. DIŞ ZEMİN VE KÜP ODA (4m x 4m x 4m -> X: [-2, +2], Z: [-2, +2], Y: [0, 4])
+const outsideGround = new THREE.Mesh(new THREE.PlaneGeometry(50, 50), mats.grass);
+outsideGround.rotation.x = -Math.PI / 2;
+outsideGround.position.y = -0.02;
+outsideGround.receiveShadow = true;
+scene.add(outsideGround);
+
+// Oda Zemini
+addBox(4.24, 0.12, 4.24, 0, -0.12, 0, mats.floor, scene, false, true);
+
+// Tavan Grubu (Gizlenebilir)
+const roofGroup = new THREE.Group();
+addBox(4.24, 0.12, 4.24, 0, 4.0, 0, mats.wall, roofGroup, true, true);
+scene.add(roofGroup);
+
+const H = 4.0; // Oda yüksekliği
+const T = 0.12; // Duvar kalınlığı
+
+// --- DUVARLAR ---
+// Sol Duvar (X = -2.06) - Tam
+addBox(T, H, 4.24, -2.06, 0, 0, mats.wall);
+
+// Ön Duvar (Z = +2.06) - Tam
+addBox(4.24, H, T, 0, 0, 2.06, mats.wall);
+
+// Arka Duvar (Z = -2.06) - Tam (Pencere kaldırıldı)
+addBox(4.24, H, T, 0, 0, -2.06, mats.wall);
+
+// Sağ Duvar (X = +2.06) -> Masanın köşesinin yanı, yatağın çaprazında KAPI (Z: +0.65 .. +1.65, Y: 0 .. 2.2)
+addBox(T, H, 2.71, 2.06, 0, -0.705, mats.wall);  // Z: -2.06 .. +0.65 (masa köşesi yanı)
+addBox(T, H, 0.47, 2.06, 0, 1.885, mats.wall);   // Z: +1.65 .. +2.12 (köşe payı)
+addBox(T, 1.8, 1.0, 2.06, 2.2, 1.15, mats.wall); // Kapı üstü duvarı
+// Kapı Kasası, Kanadı ve Kolu
+addBox(0.14, 2.2, 0.05, 2.06, 0, 0.675, mats.woodDark);
+addBox(0.14, 2.2, 0.05, 2.06, 0, 1.625, mats.woodDark);
+addBox(0.14, 0.05, 1.0, 2.06, 2.15, 1.15, mats.woodDark);
+addBox(0.05, 2.15, 0.90, 2.04, 0, 1.15, mats.door);
+addBox(0.09, 0.04, 0.12, 2.00, 1.02, 0.78, mats.handle); // Kapı kolu
+
+// 4. EŞYALAR
+// --- SOL ARKA KÖŞE: YATAK (Her iki kenardan 18 cm minik boşluklu) ---
+addBox(1.15, 0.28, 1.95, -1.245, 0, -0.845, mats.woodDark);    // Baza
+addBox(1.15, 0.75, 0.08, -1.245, 0.28, -1.78, mats.woodDark);  // Başlık
+addBox(1.08, 0.18, 1.84, -1.245, 0.28, -0.81, mats.mattress);  // Şilte
+addBox(1.10, 0.06, 1.25, -1.245, 0.44, -0.50, mats.blanket);   // Yorgan
+addBox(0.65, 0.11, 0.38, -1.245, 0.46, -1.50, mats.pillow);    // Yastık
+
+// --- SAĞ ARKA KÖŞE: ÇALIŞMA MASASI VE SANDALYE ---
+addBox(1.20, 0.05, 0.65, 1.32, 0.72, -1.60, mats.woodLight); // Masa tablası
+addBox(0.05, 0.72, 0.58, 0.76, 0, -1.60, mats.metal);        // Sol ayak
+addBox(0.05, 0.72, 0.58, 1.88, 0, -1.60, mats.metal);        // Sağ ayak
+// Masa üstü monitör
+addBox(0.62, 0.36, 0.03, 1.32, 0.87, -1.78, mats.metal);
+addBox(0.58, 0.32, 0.01, 1.32, 0.89, -1.76, mats.screen, scene, false, false);
+addBox(0.06, 0.12, 0.06, 1.32, 0.77, -1.80, mats.metal);
+
+// Çalışma Sandalyesi
+addBox(0.46, 0.07, 0.46, 1.32, 0.45, -0.92, mats.chairSeat); // Oturak
+addBox(0.44, 0.48, 0.06, 1.32, 0.52, -0.71, mats.chairSeat); // Sırtlık
+addBox(0.06, 0.45, 0.06, 1.32, 0, -0.92, mats.metal);        // Orta ayak
+addBox(0.45, 0.04, 0.06, 1.32, 0, -0.92, mats.metal);        // Tekerlek taban X
+addBox(0.06, 0.04, 0.45, 1.32, 0, -0.92, mats.metal);        // Tekerlek taban Z
+
+// 5. AYDINLATMA
+const ambient = new THREE.HemisphereLight(0xffffff, 0x706555, 0.75);
+scene.add(ambient);
+
+const sun = new THREE.DirectionalLight(0xfff1d6, 1.15);
+sun.position.set(4, 8, 5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 25;
+sun.shadow.camera.left = -5;
+sun.shadow.camera.right = 5;
+sun.shadow.camera.top = 5;
+sun.shadow.camera.bottom = -5;
+scene.add(sun);
+
+// Oda içi tavan ışığı
+const roomLight = new THREE.PointLight(0xffe8c8, 0.85, 12);
+roomLight.position.set(0, 3.6, 0);
+roomLight.castShadow = true;
+scene.add(roomLight);
+
+// 6. KAMERA KONTROLLERİ
+let mode = 'walk';
+let roofVisible = true;
+let isDragging = false;
+let prev = { x: 0, y: 0 };
+const keys = {};
+
+const player = { pos: new THREE.Vector3(-0.35, 1.55, 1.55), yaw: -0.15, pitch: -0.12 };
+const orbit = { target: new THREE.Vector3(0, 0.8, 0), theta: 0.45, phi: 0.85, radius: 7.2 };
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('btn-walk').classList.toggle('active', m === 'walk');
+  document.getElementById('btn-orbit').classList.toggle('active', m === 'orbit');
+  if (m === 'orbit') {
+    if (document.pointerLockElement) document.exitPointerLock();
+    if (roofVisible) toggleRoof(false);
+  } else {
+    if (!roofVisible) toggleRoof(true);
+  }
+}
+
+function toggleRoof(force) {
+  roofVisible = typeof force === 'boolean' ? force : !roofVisible;
+  roofGroup.visible = roofVisible;
+  document.getElementById('btn-roof').textContent = 'Tavan: ' + (roofVisible ? 'Açık' : 'Gizli');
+  document.getElementById('btn-roof').classList.toggle('active', !roofVisible);
+}
+
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'KeyM') setMode(mode === 'walk' ? 'orbit' : 'walk');
+  if (e.code === 'KeyT') toggleRoof();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+renderer.domElement.addEventListener('mousedown', e => {
+  isDragging = true;
+  prev = { x: e.clientX, y: e.clientY };
+  if (mode === 'walk' && document.pointerLockElement !== renderer.domElement) {
+    renderer.domElement.requestPointerLock?.();
+  }
+});
+window.addEventListener('mouseup', () => { isDragging = false; });
+
+window.addEventListener('mousemove', e => {
+  if (mode === 'walk') {
+    if (document.pointerLockElement === renderer.domElement) {
+      player.yaw -= e.movementX * 0.0024;
+      player.pitch -= e.movementY * 0.0024;
+    } else if (isDragging) {
+      player.yaw -= (e.clientX - prev.x) * 0.004;
+      player.pitch -= (e.clientY - prev.y) * 0.004;
+      prev = { x: e.clientX, y: e.clientY };
+    }
+    player.pitch = Math.max(-1.4, Math.min(1.4, player.pitch));
+  } else if (mode === 'orbit' && isDragging) {
+    orbit.theta -= (e.clientX - prev.x) * 0.007;
+    orbit.phi = Math.max(0.2, Math.min(1.45, orbit.phi - (e.clientY - prev.y) * 0.007));
+    prev = { x: e.clientX, y: e.clientY };
+  }
+});
+
+window.addEventListener('wheel', e => {
+  if (mode === 'orbit') {
+    orbit.radius = Math.max(3.5, Math.min(14, orbit.radius + e.deltaY * 0.008));
+  }
+}, { passive: true });
+
+// 7. ANİMASYON DÖNGÜSÜ
+let last = performance.now();
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+
+  if (mode === 'walk') {
+    let f = 0, r = 0;
+    if (keys['KeyW'] || keys['ArrowUp']) f += 1;
+    if (keys['KeyS'] || keys['ArrowDown']) f -= 1;
+    if (keys['KeyD'] || keys['ArrowRight']) r += 1;
+    if (keys['KeyA'] || keys['ArrowLeft']) r -= 1;
+
+    if (f !== 0 || r !== 0) {
+      const len = Math.hypot(f, r);
+      f /= len; r /= len;
+      const speed = 2.4 * dt;
+      const sinY = Math.sin(player.yaw), cosY = Math.cos(player.yaw);
+      player.pos.x += (-sinY * f + cosY * r) * speed;
+      player.pos.z += (-cosY * f - sinY * r) * speed;
+
+      player.pos.x = Math.max(-1.72, Math.min(1.72, player.pos.x));
+      player.pos.z = Math.max(-1.72, Math.min(1.72, player.pos.z));
+    }
+
+    camera.position.copy(player.pos);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = player.yaw;
+    camera.rotation.x = player.pitch;
+  } else {
+    camera.position.set(
+      orbit.target.x + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta),
+      orbit.target.y + orbit.radius * Math.cos(orbit.phi),
+      orbit.target.z + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta)
+    );
+    camera.lookAt(orbit.target);
+  }
+
+  renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>

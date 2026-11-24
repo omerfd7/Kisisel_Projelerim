@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Modern Minimalist Bungalov - 3D Mimari Tur</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      overflow: hidden;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #111;
+      color: #fff;
+    }
+    #canvas-container {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+
+    /* Crosshair */
+    #crosshair {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      width: 8px;
+      height: 8px;
+      margin: -4px 0 0 -4px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.75);
+      border: 1.5px solid rgba(0, 0, 0, 0.5);
+      pointer-events: none;
+      z-index: 10;
+      transition: opacity 0.2s;
+    }
+
+    /* HUD Panels */
+    .hud-panel {
+      position: fixed;
+      background: rgba(18, 22, 28, 0.78);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 12px;
+      padding: 12px 16px;
+      z-index: 20;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+    }
+
+    #info-panel {
+      top: 16px;
+      left: 16px;
+      max-width: 320px;
+    }
+    #info-panel h1 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      color: #f3c68f;
+      margin-bottom: 4px;
+    }
+    #room-badge {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 600;
+      background: rgba(243, 198, 143, 0.18);
+      color: #ffd9a8;
+      padding: 3px 9px;
+      border-radius: 20px;
+      margin-bottom: 8px;
+    }
+    #controls-hint {
+      font-size: 11.5px;
+      line-height: 1.5;
+      color: #cfd6e0;
+    }
+    #controls-hint b { color: #fff; }
+
+    /* Top-right controls */
+    #top-right-panel {
+      top: 16px;
+      right: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .btn-group {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    button {
+      background: rgba(255, 255, 255, 0.09);
+      color: #e6ecf5;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      padding: 7px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    button:hover {
+      background: rgba(243, 198, 143, 0.25);
+      border-color: rgba(243, 198, 143, 0.6);
+      color: #fff;
+    }
+    button.active {
+      background: #e2a866;
+      color: #16181d;
+      border-color: #f3c68f;
+    }
+
+    /* Bottom Teleport Bar */
+    #teleport-bar {
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 94vw;
+      padding: 10px 12px;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+      #info-panel { max-width: 230px; padding: 10px; }
+      #controls-hint { display: none; }
+      button { padding: 6px 9px; font-size: 11px; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+<div id="crosshair"></div>
+
+<div id="info-panel" class="hud-panel">
+  <h1>Şablon 1: Tek Kişilik Modern Bungalov</h1>
+  <div id="room-badge">Konum: Dış Cephe & Bahçe</div>
+  <div id="controls-hint">
+    <b>W A S D / Oklar:</b> Yürü &nbsp;|&nbsp; <b>Shift:</b> Hızlan<br>
+    <b>Ekrana Tıkla veya Sürükle:</b> Etrafa Bak (ESC ile çık)<br>
+    <b>M:</b> Kuşbakışı / Yürüme &nbsp;|&nbsp; <b>T:</b> Çatıyı Gizle/Göster
+  </div>
+</div>
+
+<div id="top-right-panel" class="hud-panel">
+  <div class="btn-group">
+    <button id="btn-mode-walk" class="active" onclick="setCameraMode('walk')">Yürüme Modu</button>
+    <button id="btn-mode-orbit" onclick="setCameraMode('orbit')">Kuşbakışı Maket</button>
+    <button id="btn-roof" onclick="toggleRoof()">Çatı: Açık</button>
+    <button id="btn-noclip" onclick="toggleCollision()">Duvar Çarpışması: Açık</button>
+  </div>
+  <div class="btn-group">
+    <button id="btn-day" onclick="setLighting('day')">Gündüz</button>
+    <button id="btn-sunset" class="active" onclick="setLighting('sunset')">Gün Batımı</button>
+    <button id="btn-night" onclick="setLighting('night')">Gece</button>
+  </div>
+</div>
+
+<div id="teleport-bar" class="hud-panel">
+  <button onclick="teleportTo('exterior')">Dış Cephe</button>
+  <button onclick="teleportTo('entrance')">Giriş Holü</button>
+  <button onclick="teleportTo('living')">Salon & Ada Mutfak</button>
+  <button onclick="teleportTo('bedroom')">Ana Yatak Odası</button>
+  <button onclick="teleportTo('dressing')">Giyinme & Banyo</button>
+  <button onclick="teleportTo('study')">Çalışma & Misafir</button>
+  <button onclick="teleportTo('veranda')">Veranda & Havuz</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ============================================================================
+// 1. SAHNE, KAMERA VE RENDERER KURULUMU
+// ============================================================================
+const container = document.getElementById('canvas-container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xe69f73);
+scene.fog = new THREE.FogExp2(0xe69f73, 0.012);
+
+const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 160);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+container.appendChild(renderer.domElement);
+
+// ============================================================================
+// 2. PROSEDÜREL DOKULAR (HARİCİ RESİM GEREKTİRMEZ)
+// ============================================================================
+function createWoodTexture(baseHex, grainHex, planks = 6, rx = 4, ry = 4) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = baseHex;
+  ctx.fillRect(0, 0, 256, 256);
+
+  const plankH = 256 / planks;
+  for (let i = 0; i < planks; i++) {
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)';
+    ctx.fillRect(0, i * plankH, 256, plankH);
+    ctx.strokeStyle = grainHex;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, i * plankH);
+    ctx.lineTo(256, i * plankH);
+    ctx.stroke();
+
+    for (let g = 0; g < 14; g++) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+      ctx.lineWidth = 1;
+      const y = i * plankH + Math.random() * plankH;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(256, y + (Math.random() - 0.5) * 3);
+      ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(rx, ry);
+  return tex;
+}
+
+function createTileTexture(bgHex, lineHex, grid = 4, rx = 4, ry = 4) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = bgHex;
+  ctx.fillRect(0, 0, 256, 256);
+  const step = 256 / grid;
+  ctx.strokeStyle = lineHex;
+  ctx.lineWidth = 2;
+  for (let i = 0; i <= grid; i++) {
+    ctx.beginPath(); ctx.moveTo(i * step, 0); ctx.lineTo(i * step, 256); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i * step); ctx.lineTo(256, i * step); ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(rx, ry);
+  return tex;
+}
+
+function createMarbleTexture() {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#f3f1ed';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 12; i++) {
+    ctx.strokeStyle = 'rgba(140, 145, 150, 0.25)';
+    ctx.lineWidth = 1 + Math.random() * 2;
+    ctx.beginPath();
+    let x = Math.random() * 256, y = 0;
+    ctx.moveTo(x, y);
+    for (let s = 0; s < 6; s++) {
+      x += (Math.random() - 0.5) * 70;
+      y += 45;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function createGrassTexture() {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#4c7338';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 1600; i++) {
+    ctx.fillStyle = Math.random() > 0.5 ? 'rgba(95, 138, 66, 0.35)' : 'rgba(42, 68, 28, 0.35)';
+    ctx.fillRect(Math.random() * 256, Math.random() * 256, 3, 3);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(22, 22);
+  return tex;
+}
+
+// ============================================================================
+// 3. MALZEMELER
+// ============================================================================
+const mats = {
+  wallExt: new THREE.MeshStandardMaterial({ color: 0xf2efe9, roughness: 0.85 }),
+  wallInt: new THREE.MeshStandardMaterial({ color: 0xf7f5f0, roughness: 0.9 }),
+  wallAccent: new THREE.MeshStandardMaterial({ color: 0x3b4046, roughness: 0.7 }),
+  anthracite: new THREE.MeshStandardMaterial({ color: 0x22262a, roughness: 0.5, metalness: 0.3 }),
+  woodFloor: new THREE.MeshStandardMaterial({ map: createWoodTexture('#b6895b', '#8d643d', 8, 5, 5), roughness: 0.55 }),
+  deckFloor: new THREE.MeshStandardMaterial({ map: createWoodTexture('#8a5c38', '#4f321c', 10, 6, 3), roughness: 0.7 }),
+  woodDark: new THREE.MeshStandardMaterial({ map: createWoodTexture('#5a3e28', '#3c2718', 4, 2, 2), roughness: 0.6 }),
+  woodLight: new THREE.MeshStandardMaterial({ map: createWoodTexture('#d2ad82', '#b28b60', 4, 2, 2), roughness: 0.6 }),
+  tileBath: new THREE.MeshStandardMaterial({ map: createTileTexture('#dcd9d2', '#b8b4ab', 4, 3, 3), roughness: 0.4 }),
+  tileKitchen: new THREE.MeshStandardMaterial({ map: createTileTexture('#e8e5df', '#cccccc', 3, 4, 4), roughness: 0.35 }),
+  marble: new THREE.MeshStandardMaterial({ map: createMarbleTexture(), roughness: 0.2, metalness: 0.05 }),
+  grass: new THREE.MeshStandardMaterial({ map: createGrassTexture(), roughness: 0.95 }),
+  concrete: new THREE.MeshStandardMaterial({ color: 0xb8b5ae, roughness: 0.85 }),
+  glass: new THREE.MeshPhysicalMaterial({
+    color: 0xdaf0f7, transparent: true, opacity: 0.28, roughness: 0.05, metalness: 0.1, side: THREE.DoubleSide
+  }),
+  mirror: new THREE.MeshStandardMaterial({ color: 0xdce6ed, roughness: 0.05, metalness: 0.9 }),
+  fabricBeige: new THREE.MeshStandardMaterial({ color: 0xd8cfc2, roughness: 0.9 }),
+  fabricGrey: new THREE.MeshStandardMaterial({ color: 0x5c626b, roughness: 0.9 }),
+  fabricBlue: new THREE.MeshStandardMaterial({ color: 0x415a77, roughness: 0.85 }),
+  fabricTerracotta: new THREE.MeshStandardMaterial({ color: 0xb86447, roughness: 0.85 }),
+  rugLiving: new THREE.MeshStandardMaterial({ color: 0xcfc7bc, roughness: 0.98 }),
+  rugBed: new THREE.MeshStandardMaterial({ color: 0xd9d2c7, roughness: 0.98 }),
+  chrome: new THREE.MeshStandardMaterial({ color: 0xd9dee3, roughness: 0.2, metalness: 0.85 }),
+  blackMetal: new THREE.MeshStandardMaterial({ color: 0x1a1c1e, roughness: 0.35, metalness: 0.7 }),
+  whiteCeramic: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 }),
+  leaf: new THREE.MeshStandardMaterial({ color: 0x3b6e35, roughness: 0.75 }),
+  bark: new THREE.MeshStandardMaterial({ color: 0x5c422c, roughness: 0.9 }),
+  water: new THREE.MeshPhysicalMaterial({
+    color: 0x29b6d8, transparent: true, opacity: 0.75, roughness: 0.08, metalness: 0.1
+  }),
+  emissiveWarm: new THREE.MeshStandardMaterial({
+    color: 0xfff3d6, emissive: 0xffcf87, emissiveIntensity: 1.5, roughness: 0.2
+  }),
+  emissiveFire: new THREE.MeshStandardMaterial({
+    color: 0xff6600, emissive: 0xff4500, emissiveIntensity: 2.2, roughness: 0.5
+  }),
+  screenGlow: new THREE.MeshStandardMaterial({
+    color: 0x182538, emissive: 0x3a6a9c, emissiveIntensity: 0.7, roughness: 0.2
+  })
+};
+
+// ============================================================================
+// 4. YARDIMCI GEOMETRİ & ÇARPIŞMA SİSTEMİ
+// ============================================================================
+const wallColliders = [];
+const roofGroup = new THREE.Group();
+scene.add(roofGroup);
+
+function addBoxFloor(w, h, d, x, floorY, z, mat, parent = scene, cast = true, receive = true) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, floorY + h / 2, z);
+  mesh.castShadow = cast;
+  mesh.receiveShadow = receive;
+  parent.add(mesh);
+  return mesh;
+}
+
+function addWall(w, h, d, x, floorY, z, mat, solid = true, parent = scene) {
+  const mesh = addBoxFloor(w, h, d, x, floorY, z, mat, parent, true, true);
+  if (solid) {
+    wallColliders.push({
+      minX: x - w / 2, maxX: x + w / 2,
+      minZ: z - d / 2, maxZ: z + d / 2
+    });
+  }
+  return mesh;
+}
+
+function addGlassPanel(w, h, d, x, floorY, z, solid = true) {
+  const frameThick = 0.05;
+  addBoxFloor(w, frameThick, d + 0.02, x, floorY, z, mats.anthracite);
+  addBoxFloor(w, frameThick, d + 0.02, x, floorY + h - frameThick, z, mats.anthracite);
+  const isHorizontalX = w > d;
+  if (isHorizontalX) {
+    addBoxFloor(frameThick, h, d + 0.02, x - w / 2 + frameThick / 2, floorY, z, mats.anthracite);
+    addBoxFloor(frameThick, h, d + 0.02, x + w / 2 - frameThick / 2, floorY, z, mats.anthracite);
+  } else {
+    addBoxFloor(w + 0.02, h, frameThick, x, floorY, z - d / 2 + frameThick / 2, mats.anthracite);
+    addBoxFloor(w + 0.02, h, frameThick, x, floorY, z + d / 2 - frameThick / 2, mats.anthracite);
+  }
+  const glass = addBoxFloor(w - 0.06, h - 0.08, Math.min(d, 0.04), x, floorY + 0.04, z, mats.glass, scene, false, false);
+  if (solid) {
+    wallColliders.push({
+      minX: x - w / 2, maxX: x + w / 2,
+      minZ: z - d / 2, maxZ: z + d / 2
+    });
+  }
+  return glass;
+}
+
+function addPlant(x, floorY, z, scale = 1) {
+  const g = new THREE.Group();
+  g.position.set(x, floorY, z);
+  g.scale.setScalar(scale);
+
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.16, 0.36, 16), mats.anthracite);
+  pot.position.y = 0.18; pot.castShadow = true; pot.receiveShadow = true;
+  g.add(pot);
+
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.7, 8), mats.bark);
+  stem.position.y = 0.65; stem.castShadow = true;
+  g.add(stem);
+
+  const leafPositions = [
+    [0, 1.1, 0, 0.28], [-0.18, 0.92, 0.12, 0.22], [0.2, 0.95, -0.1, 0.23],
+    [0.1, 1.0, 0.18, 0.21], [-0.12, 1.05, -0.16, 0.2]
+  ];
+  leafPositions.forEach(([lx, ly, lz, r]) => {
+    const lf = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 1), mats.leaf);
+    lf.position.set(lx, ly, lz);
+    lf.scale.set(1.1, 0.65, 1.1);
+    lf.castShadow = true;
+    g.add(lf);
+  });
+  scene.add(g);
+}
+
+function addOutdoorTree(x, z, scale = 1) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z);
+  g.scale.setScalar(scale);
+
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.22, 1.8, 10), mats.bark);
+  trunk.position.y = 0.9; trunk.castShadow = true;
+  g.add(trunk);
+
+  const crown1 = new THREE.Mesh(new THREE.DodecahedronGeometry(1.1, 1), mats.leaf);
+  crown1.position.set(0, 2.3, 0); crown1.castShadow = true;
+  g.add(crown1);
+
+  const crown2 = new THREE.Mesh(new THREE.DodecahedronGeometry(0.85, 1), mats.leaf);
+  crown2.position.set(0.45, 2.9, 0.25); crown2.castShadow = true;
+  g.add(crown2);
+
+  scene.add(g);
+}
+
+function addCeilingSpot(x, z, y = 3.16) {
+  const spot = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.03, 16), mats.emissiveWarm);
+  spot.position.set(x, y, z);
+  roofGroup.add(spot);
+}
+
+// ============================================================================
+// 5. ZEMİN, ARSA, VERANDA VE HAVUZ
+// ============================================================================
+// Çimen Arsa
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(90, 90), mats.grass);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.02;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Ev Taban Plakası (14m x 8m -> X: [-7, +7], Z: [-4, +4])
+addBoxFloor(14.3, 0.16, 8.3, 0, -0.15, 0, mats.concrete, scene, false, true);
+
+// Oda Zemin Kaplamaları (y = 0.01)
+addBoxFloor(4.5, 0.02, 5.2, -4.75, 0, 1.4, mats.woodFloor, scene, false, true);   // Ana Yatak Odası
+addBoxFloor(1.8, 0.02, 2.8, -3.4, 0, -2.6, mats.woodFloor, scene, false, true);   // Giyinme Odası
+addBoxFloor(2.7, 0.02, 2.8, -5.65, 0, -2.6, mats.tileBath, scene, false, true);   // Ebeveyn Banyosu
+addBoxFloor(6.0, 0.02, 5.5, 0.5, 0, 1.25, mats.woodFloor, scene, false, true);     // Salon & Açık Mutfak
+addBoxFloor(2.2, 0.02, 2.5, -1.4, 0, -2.75, mats.tileKitchen, scene, false, true);// Giriş Holü
+addBoxFloor(2.1, 0.02, 2.5, 0.75, 0, -2.75, mats.tileKitchen, scene, false, true);// Kiler / Çamaşır
+addBoxFloor(1.7, 0.02, 2.5, 2.65, 0, -2.75, mats.tileBath, scene, false, true);   // Misafir WC
+addBoxFloor(3.5, 0.02, 8.0, 5.25, 0, 0, mats.woodFloor, scene, false, true);      // Çalışma / Misafir Odası
+
+// Ön Veranda Ahşap Deck (X: [-7, +7], Z: [+4, +7.2])
+addBoxFloor(14.0, 0.14, 3.2, 0, -0.14, 5.6, mats.deckFloor, scene, false, true);
+
+// Mini Dalma Havuzu (Veranda sağ önü: X: [2.2, 6.4], Z: [4.8, 7.0])
+addBoxFloor(4.4, 0.25, 2.4, 4.3, -0.14, 5.9, mats.anthracite, scene, true, true);
+const poolWater = addBoxFloor(4.1, 0.08, 2.1, 4.3, 0.01, 5.9, mats.water, scene, false, false);
+
+// Giriş Yürüyüş Taşları (Arka Kapıya Doğru)
+for (let i = 0; i < 6; i++) {
+  addBoxFloor(1.3, 0.05, 0.55, -1.4, -0.02, -4.6 - i * 0.85, mats.concrete, scene, false, true);
+}
+
+// ============================================================================
+// 6. DUVARLAR VE KAPI/PENCERE AÇIKLIKLARI (H = 3.2m, T = 0.16m)
+// ============================================================================
+const H = 3.2, T = 0.16;
+
+// --- ARKA CEPHE (Z = -4.0) ---
+addWall(0.7, H, T, -6.65, 0, -4.0, mats.wallExt, true);
+// Banyo penceresi (X: -6.3 .. -5.0)
+addWall(1.3, 1.3, T, -5.65, 0, -4.0, mats.wallExt, true);
+addGlassPanel(1.3, 1.0, 0.08, -5.65, 1.3, -4.0, true);
+addWall(1.3, 0.9, T, -5.65, 2.3, -4.0, mats.wallExt, false);
+
+addWall(3.0, H, T, -3.5, 0, -4.0, mats.wallExt, true);
+// Giriş Kapısı Açıklığı (X: -2.0 .. -0.8)
+addWall(1.2, 1.0, T, -1.4, 2.2, -4.0, mats.wallExt, false);
+// Açık Pivot Giriş Kapısı Kanadı
+const frontDoor = new THREE.Mesh(new THREE.BoxGeometry(1.15, 2.18, 0.07), mats.woodDark);
+frontDoor.position.set(-1.7, 1.09, -3.55);
+frontDoor.rotation.y = Math.PI / 3;
+frontDoor.castShadow = true;
+scene.add(frontDoor);
+
+addWall(5.1, H, T, 1.75, 0, -4.0, mats.wallExt, true);
+// Çalışma Odası Arka Penceresi (X: +4.3 .. +6.3)
+addWall(2.0, 0.9, T, 5.3, 0, -4.0, mats.wallExt, true);
+addGlassPanel(2.0, 1.5, 0.08, 5.3, 0.9, -4.0, true);
+addWall(2.0, 0.8, T, 5.3, 2.4, -4.0, mats.wallExt, false);
+addWall(0.7, H, T, 6.65, 0, -4.0, mats.wallExt, true);
+
+// --- SOL VE SAĞ DIŞ DUVARLAR ---
+addWall(T, H, 8.16, -7.0, 0, 0, mats.wallExt, true);
+addWall(T, H, 8.16, 7.0, 0, 0, mats.wallExt, true);
+// Dış cephe ahşap çıta dekorları
+for (let z = -3.6; z <= 3.6; z += 0.25) {
+  addBoxFloor(0.05, H, 0.08, -7.1, 0, z, mats.woodDark);
+  addBoxFloor(0.05, H, 0.08, 7.1, 0, z, mats.woodDark);
+}
+
+// --- ÖN CAM CEPHE (Z = +4.0) ---
+addWall(1.0, H, T, -6.5, 0, 4.0, mats.anthracite, true);
+// Ana Yatak Odası Sürgülü Açıklık (X: -6.0 .. -3.5)
+addWall(2.5, 0.7, T, -4.75, 2.5, 4.0, mats.anthracite, false);
+addGlassPanel(0.9, 2.5, 0.06, -5.55, 0, 4.0, false); // Kenara çekilmiş sürgülü cam
+
+addWall(1.0, H, T, -3.0, 0, 4.0, mats.anthracite, true);
+addGlassPanel(1.0, 2.5, 0.08, -2.0, 0, 4.0, true);
+addWall(1.0, 0.7, T, -2.0, 2.5, 4.0, mats.anthracite, false);
+
+// Salon Geniş Sürgülü Açıklık (X: -1.5 .. +2.5)
+addWall(4.0, 0.7, T, 0.5, 2.5, 4.0, mats.anthracite, false);
+addGlassPanel(1.2, 2.5, 0.06, -0.9, 0, 4.0, false); // Kenara çekilmiş cam kanat
+
+addGlassPanel(1.0, 2.5, 0.08, 3.0, 0, 4.0, true);
+addWall(1.0, 0.7, T, 3.0, 2.5, 4.0, mats.anthracite, false);
+
+addWall(0.8, H, T, 3.9, 0, 4.0, mats.anthracite, true);
+// Çalışma Odası Açıklığı (X: +4.3 .. +6.2)
+addWall(1.9, 0.7, T, 5.25, 2.5, 4.0, mats.anthracite, false);
+addWall(0.8, H, T, 6.6, 0, 4.0, mats.anthracite, true);
+
+// --- İÇ BÖLME DUVARLARI ---
+// 1. Ana Suit / Salon Bölmesi (X = -2.5)
+addWall(T, H, 3.4, -2.5, 0, -2.3, mats.wallInt, true);
+addWall(T, 1.0, 1.2, -2.5, 2.2, 0.0, mats.wallInt, false); // Kapı (Z: -0.6..+0.6)
+addWall(T, H, 3.4, -2.5, 0, 2.3, mats.wallInt, true);
+
+// 2. Yatak Odası / Giyinme+Banyo Bölmesi (Z = -1.2, X: -7.0 .. -2.5)
+addWall(3.0, H, T, -5.5, 0, -1.2, mats.wallInt, true);
+addWall(1.2, 1.0, T, -3.4, 2.2, -1.2, mats.wallInt, false); // Giyinme kapısı (X: -4.0..-2.8)
+addWall(0.3, H, T, -2.65, 0, -1.2, mats.wallInt, true);
+
+// 3. Ebeveyn Banyosu / Giyinme Bölmesi (X = -4.3, Z: -4.0 .. -1.2)
+addWall(T, H, 0.9, -4.3, 0, -3.55, mats.wallInt, true);
+addWall(T, 1.0, 1.1, -4.3, 2.2, -2.55, mats.wallInt, false); // Banyo kapısı (Z: -3.1..-2.0)
+addWall(T, H, 0.8, -4.3, 0, -1.6, mats.wallInt, true);
+
+// 4. Arka Servis Hattı Bölmesi (Z = -1.5, X: -2.5 .. +3.5)
+addWall(2.2, 0.7, T, -1.4, 2.5, -1.5, mats.wallInt, false); // Giriş açık kemeri
+addWall(2.6, H, T, 1.0, 0, -1.5, mats.wallInt, true); // Mutfak tezgah arkası duvarı
+addWall(1.2, 1.0, T, 2.9, 2.2, -1.5, mats.wallInt, false); // Misafir WC kapısı (X: +2.3..+3.5)
+
+// 5. Giriş Holü / Kiler Bölmesi (X = -0.3, Z: -4.0 .. -1.5)
+addWall(T, H, 0.7, -0.3, 0, -3.65, mats.wallInt, true);
+addWall(T, 1.0, 1.1, -0.3, 2.2, -2.75, mats.wallInt, false); // Kiler kapısı (Z: -3.3..-2.2)
+addWall(T, H, 0.7, -0.3, 0, -1.85, mats.wallInt, true);
+
+// 6. Kiler / Misafir WC Bölmesi (X = +1.8, Z: -4.0 .. -1.5)
+addWall(T, H, 2.5, 1.8, 0, -2.75, mats.wallInt, true);
+
+// 7. Salon / Çalışma Odası Bölmesi (X = +3.5, Z: -4.0 .. +4.0)
+addWall(T, H, 3.5, 3.5, 0, -2.25, mats.wallInt, true);
+addWall(T, 1.0, 1.2, 3.5, 2.2, 0.1, mats.wallInt, false); // Çalışma odası kapısı (Z: -0.5..+0.7)
+addWall(T, H, 3.3, 3.5, 0, 2.35, mats.wallInt, true);
+
+// ============================================================================
+// 7. ÇATI, SAÇAK VE TAVAN SPOTLARI (roofGroup içinde -> T ile açılıp kapanır)
+// ============================================================================
+addBoxFloor(14.8, 0.16, 11.0, 0, 3.2, 1.2, mats.wallInt, roofGroup, true, true); // Ana tavan + veranda saçağı
+addBoxFloor(15.0, 0.24, 11.2, 0, 3.26, 1.2, mats.anthracite, roofGroup, true, true); // Antrasit alınlık
+
+// Pergola kirişleri (Veranda önü X: [-6.8, +6.8], Z: 5.5..6.8)
+for (let x = -6.5; x <= 6.5; x += 0.65) {
+  addBoxFloor(0.08, 0.14, 1.4, x, 3.12, 6.0, mats.woodDark, roofGroup, true, false);
+}
+// Veranda taşıyıcı kolonlar
+addWall(0.18, 3.2, 0.18, -6.8, 0, 6.6, mats.anthracite, true);
+addWall(0.18, 3.2, 0.18, 0.0, 0, 6.6, mats.anthracite, true);
+addWall(0.18, 3.2, 0.18, 6.8, 0, 6.6, mats.anthracite, true);
+
+// Tavan Gömme LED Spotlar
+[
+  [-5.6, -2.5], [-3.4, -2.5], [-5.2, 0.5], [-5.2, 2.5], [-3.5, 2.5],
+  [-1.4, -2.7], [0.7, -2.7], [2.6, -2.7],
+  [-1.2, 0.3], [1.0, 0.3], [-1.0, 2.5], [1.2, 2.5],
+  [5.2, -2.2], [5.2, 0.5], [5.2, 2.6],
+  [-4.5, 5.2], [0.0, 5.2], [4.5, 5.2]
+].forEach(([sx, sz]) => addCeilingSpot(sx, sz));
+
+// ============================================================================
+// 8. MOBİLYA VE İÇ DEKORASYON
+// ============================================================================
+
+// --- A. SALON VE AÇIK ADA MUTFAK ---
+// Mutfak Arka Dolapları (Z = -1.1, X: -0.2 .. +2.2)
+addBoxFloor(0.65, 2.2, 0.65, 0.05, 0, -1.12, mats.anthracite); // Buzdolabı
+addBoxFloor(1.75, 0.88, 0.62, 1.25, 0, -1.12, mats.woodLight); // Alt dolaplar
+addBoxFloor(1.75, 0.05, 0.64, 1.25, 0.88, -1.12, mats.marble); // Tezgah
+addBoxFloor(1.75, 0.65, 0.35, 1.25, 1.48, -1.25, mats.anthracite); // Üst dolaplar
+addBoxFloor(1.7, 0.02, 0.05, 1.25, 1.46, -1.15, mats.emissiveWarm, scene, false, false); // Tezgah altı LED
+addBoxFloor(0.55, 0.03, 0.42, 1.6, 0.93, -1.12, mats.blackMetal); // İndüksiyon ocak
+addBoxFloor(0.5, 0.02, 0.4, 0.85, 0.93, -1.12, mats.chrome); // Eviye
+
+// Mutfak Adası (X: +0.9, Z: +0.35)
+addBoxFloor(2.2, 0.88, 0.85, 0.9, 0, 0.35, mats.woodDark);
+addBoxFloor(2.3, 0.06, 0.98, 0.9, 0.88, 0.35, mats.marble);
+// 3 Adet Bar Taburesi
+for (let i = 0; i < 3; i++) {
+  const bx = 0.25 + i * 0.65;
+  addBoxFloor(0.05, 0.62, 0.05, bx, 0, 1.02, mats.blackMetal);
+  addBoxFloor(0.36, 0.06, 0.36, bx, 0.62, 1.02, mats.fabricTerracotta);
+}
+// Ada üstü sarkıt lambalar
+for (let i = 0; i < 2; i++) {
+  const lx = 0.45 + i * 0.9;
+  addBoxFloor(0.02, 0.75, 0.02, lx, 2.45, 0.35, mats.blackMetal, roofGroup);
+  const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.14, 16), mats.emissiveWarm);
+  shade.position.set(lx, 2.42, 0.35);
+  roofGroup.add(shade);
+}
+
+// Şömine & TV Ünitesi (X = -2.35 duvarı önünde, Z: 1.1 .. 3.4)
+addBoxFloor(0.38, 0.38, 2.3, -2.23, 0, 2.25, mats.woodDark); // Alt TV konsolu
+addBoxFloor(0.36, 0.55, 0.85, -2.23, 0.38, 1.55, mats.anthracite); // Şömine gövdesi
+addBoxFloor(0.08, 0.28, 0.62, -2.07, 0.48, 1.55, mats.emissiveFire, scene, false, false); // Şömine alevi
+addBoxFloor(0.36, 2.2, 0.6, -2.23, 0.93, 1.55, mats.wallAccent); // Şömine bacası
+addBoxFloor(0.06, 0.82, 1.45, -2.36, 1.05, 2.65, mats.blackMetal); // Dev TV çerçeve
+addBoxFloor(0.02, 0.76, 1.38, -2.33, 1.08, 2.65, mats.screenGlow, scene, false, false); // TV ekranı
+
+// L-Koltuk Takımı (X: +0.3, Z: +2.4)
+addBoxFloor(2.6, 0.02, 3.0, -0.5, 0.01, 2.4, mats.rugLiving, scene, false, true); // Salon halısı
+addBoxFloor(0.85, 0.42, 2.2, 0.7, 0, 2.3, mats.fabricBeige); // Ana oturum
+addBoxFloor(0.2, 0.75, 2.2, 1.05, 0, 2.3, mats.fabricBeige); // Sırtlık
+addBoxFloor(1.5, 0.42, 0.85, 0.38, 0, 2.98, mats.fabricBeige); // L uzanma parçası
+addBoxFloor(0.8, 0.32, 1.1, -0.65, 0, 2.2, mats.woodLight); // Orta sehpa
+addBoxFloor(0.04, 0.04, 0.5, -0.65, 0.32, 2.1, mats.anthracite); // Sehpa dekoru
+addPlant(1.55, 0, 3.45, 1.2); // Büyük salon bitkisi
+
+// --- B. GİRİŞ HOLÜ, KİLER VE MİSAFİR WC ---
+// Giriş Vestiyer (X = -2.25)
+addBoxFloor(0.45, 2.3, 1.6, -2.2, 0, -2.6, mats.woodLight);
+addBoxFloor(0.42, 0.45, 0.7, -2.2, 0, -3.55, mats.fabricGrey); // Ayakkabı giyme pufu
+addBoxFloor(0.03, 1.2, 0.6, -2.4, 1.0, -3.55, mats.mirror); // Boy aynası
+
+// Kiler / Çamaşır Odası (X: -0.3 .. +1.8, Z: -4.0 .. -1.5)
+addBoxFloor(0.62, 0.85, 0.62, 0.25, 0, -3.6, mats.whiteCeramic); // Çamaşır makinesi
+addBoxFloor(0.62, 0.85, 0.62, 0.92, 0, -3.6, mats.whiteCeramic); // Kurutma makinesi
+addBoxFloor(0.4, 2.0, 1.8, 1.52, 0, -2.75, mats.woodLight); // Kiler rafları
+
+// Misafir WC + Duş (X: +1.8 .. +3.5, Z: -4.0 .. -1.5)
+addGlassPanel(1.5, 2.1, 0.04, 2.65, 0, -2.95, true); // Duş camı
+addBoxFloor(0.5, 0.8, 0.8, 2.12, 0, -2.2, mats.woodDark); // Lavabo dolabı
+addBoxFloor(0.04, 0.8, 0.65, 1.9, 1.1, -2.2, mats.mirror); // Ayna
+addBoxFloor(0.55, 0.42, 0.38, 3.12, 0, -2.2, mats.whiteCeramic); // Klozet
+
+// --- C. ANA SUİT (YATAK ODASI + GİYİNME + EBEVEYN BANYOSU) ---
+// Ana Yatak Odası (X: -7.0 .. -2.5, Z: -1.2 .. +4.0)
+addBoxFloor(2.8, 0.02, 2.6, -5.4, 0.01, 1.4, mats.rugBed, scene, false, true);
+addBoxFloor(2.1, 0.36, 1.9, -5.85, 0, 1.4, mats.woodDark); // Karyola baza
+addBoxFloor(0.14, 1.15, 2.2, -6.82, 0, 1.4, mats.fabricGrey); // Yatak başlığı
+addBoxFloor(1.95, 0.24, 1.75, -5.8, 0.36, 1.4, mats.whiteCeramic); // Yatak şiltesi
+addBoxFloor(1.3, 0.08, 1.75, -5.5, 0.56, 1.4, mats.fabricTerracotta); // Yatak örtüsü
+addBoxFloor(0.45, 0.14, 0.65, -6.5, 0.6, 0.95, mats.fabricBeige); // Yastık 1
+addBoxFloor(0.45, 0.14, 0.65, -6.5, 0.6, 1.85, mats.fabricBeige); // Yastık 2
+// Komodinler & Abajurlar
+addBoxFloor(0.45, 0.45, 0.5, -6.65, 0, 0.1, mats.woodLight);
+addBoxFloor(0.45, 0.45, 0.5, -6.65, 0, 2.7, mats.woodLight);
+addBoxFloor(0.18, 0.26, 0.18, -6.65, 0.45, 0.1, mats.emissiveWarm);
+addBoxFloor(0.18, 0.26, 0.18, -6.65, 0.45, 2.7, mats.emissiveWarm);
+// Yatak odası okuma koltuğu & TV
+addBoxFloor(0.75, 0.72, 0.75, -3.2, 0, 3.1, mats.fabricBlue);
+addBoxFloor(0.05, 0.68, 1.2, -2.6, 1.05, 1.4, mats.blackMetal); // Yatak odası TV
+addPlant(-6.5, 0, 3.5, 0.95);
+
+// Giyinme Odası (X: -4.3 .. -2.5, Z: -4.0 .. -1.2)
+addBoxFloor(0.55, 2.4, 2.4, -2.85, 0, -2.6, mats.woodDark); // Gardırop sırası
+addBoxFloor(1.1, 2.4, 0.5, -3.65, 0, -3.65, mats.woodDark); // Arka dolap
+addBoxFloor(0.5, 0.42, 0.9, -3.6, 0, -2.5, mats.fabricBeige); // Orta giyinme pufu
+
+// Ebeveyn Banyosu (X: -7.0 .. -4.3, Z: -4.0 .. -1.2)
+addGlassPanel(0.04, 2.1, 1.35, -5.7, 0, -3.25, true); // Walk-in duş camı
+addBoxFloor(0.5, 0.04, 0.5, -6.35, 2.35, -3.4, mats.chrome); // Yağmur duş başlığı
+addBoxFloor(1.6, 0.75, 0.52, -5.85, 0, -1.55, mats.woodLight); // Çift lavabo dolabı
+addBoxFloor(1.64, 0.05, 0.55, -5.85, 0.75, -1.55, mats.marble);
+addBoxFloor(1.5, 0.9, 0.03, -5.85, 1.1, -1.29, mats.mirror); // Banyo aynası
+addBoxFloor(0.4, 0.42, 0.58, -4.9, 0, -3.6, mats.whiteCeramic); // Klozet
+
+// --- D. ÇALIŞMA / HOBİ VE MİSAFİR ODASI (X: +3.5 .. +7.0, Z: -4.0 .. +4.0) ---
+// Home Office Masası (Ön manzaraya bakan)
+addBoxFloor(1.8, 0.05, 0.8, 5.25, 0.73, 2.2, mats.woodDark); // Çalışma masası
+addBoxFloor(0.06, 0.73, 0.7, 4.4, 0, 2.2, mats.blackMetal);
+addBoxFloor(0.06, 0.73, 0.7, 6.1, 0, 2.2, mats.blackMetal);
+addBoxFloor(0.95, 0.42, 0.04, 5.25, 0.88, 2.45, mats.screenGlow); // Geniş monitör
+addBoxFloor(0.58, 0.95, 0.58, 5.25, 0, 1.45, mats.anthracite); // Ofis koltuğu
+// Sağ Duvar Boydan Boya Kitaplık
+addBoxFloor(0.4, 2.4, 2.8, 6.72, 0, 0.0, mats.woodLight);
+for (let r = 0; r < 4; r++) {
+  addBoxFloor(0.36, 0.25, 0.4, 6.7, 0.35 + r * 0.55, -0.8 + r * 0.35, mats.fabricTerracotta);
+  addBoxFloor(0.36, 0.28, 0.3, 6.7, 0.35 + r * 0.55, 0.4 - r * 0.2, mats.fabricBlue);
+}
+// Arka Bölüm: Misafir Açılır Koltuk & Okuma Köşesi
+addBoxFloor(2.1, 0.02, 1.8, 5.25, 0.01, -2.7, mats.rugLiving, scene, false, true);
+addBoxFloor(2.0, 0.42, 0.9, 5.25, 0, -3.35, mats.fabricBlue); // Misafir koltuğu / yatak
+addBoxFloor(2.0, 0.38, 0.2, 5.25, 0.42, -3.7, mats.fabricBlue);
+addBoxFloor(0.5, 0.45, 0.5, 3.95, 0, -3.35, mats.woodLight); // Sehpa
+addPlant(6.45, 0, 3.4, 0.9);
+
+// --- E. VERANDA DIŞ MEKAN MOBİLYALARI (Z: +4.0 .. +7.2) ---
+// Dış mekan oturma grubu (Sol veranda)
+addBoxFloor(2.2, 0.38, 0.85, -4.5, 0, 5.0, mats.anthracite);
+addBoxFloor(2.1, 0.14, 0.8, -4.5, 0.38, 5.0, mats.fabricBeige);
+addBoxFloor(0.85, 0.38, 1.4, -5.8, 0, 5.6, mats.anthracite);
+addBoxFloor(0.8, 0.14, 1.35, -5.8, 0.38, 5.6, mats.fabricBeige);
+addBoxFloor(1.1, 0.32, 0.7, -4.5, 0, 5.95, mats.woodDark); // Dış sehpa
+// Havuz başı şezlonglar
+addBoxFloor(0.75, 0.24, 1.9, 0.6, 0, 5.8, mats.fabricBeige);
+addBoxFloor(0.75, 0.24, 1.9, 1.55, 0, 5.8, mats.fabricBeige);
+
+// Bahçe Ağaçları
+[
+  [-11, -7, 1.2], [11, -8, 1.3], [-12, 6, 1.1], [11.5, 7, 1.25],
+  [-9, 13, 1.4], [9, 14, 1.1], [0, 16, 1.3], [-14, -1, 1.0]
+].forEach(([tx, tz, ts]) => addOutdoorTree(tx, tz, ts));
+
+// ============================================================================
+// 9. AYDINLATMA SİSTEMİ (GÜNDÜZ / GÜN BATIMI / GECE)
+// ============================================================================
+const hemiLight = new THREE.HemisphereLight(0xffe6cc, 0x3b4d34, 0.6);
+scene.add(hemiLight);
+
+const sunLight = new THREE.DirectionalLight(0xffb570, 1.15);
+sunLight.position.set(16, 11, 20);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.width = 2048;
+sunLight.shadow.mapSize.height = 2048;
+sunLight.shadow.camera.near = 2;
+sunLight.shadow.camera.far = 65;
+const dCam = 18;
+sunLight.shadow.camera.left = -dCam;
+sunLight.shadow.camera.right = dCam;
+sunLight.shadow.camera.top = dCam;
+sunLight.shadow.camera.bottom = -dCam;
+sunLight.shadow.bias = -0.0005;
+scene.add(sunLight);
+
+// İç mekan sıcak nokta ışıkları
+const interiorLights = [];
+function addInteriorLight(x, y, z, color = 0xffd29d, dist = 9) {
+  const pl = new THREE.PointLight(color, 0.7, dist, 1.6);
+  pl.position.set(x, y, z);
+  scene.add(pl);
+  interiorLights.push(pl);
+  return pl;
+}
+addInteriorLight(-0.2, 2.75, 1.8, 0xffd29d, 11);  // Salon + Mutfak
+addInteriorLight(-5.0, 2.75, 1.2, 0xffd29d, 9);   // Ana Yatak Odası
+addInteriorLight(-5.0, 2.75, -2.5, 0xfff0dd, 7);  // Banyo + Giyinme
+addInteriorLight(5.2, 2.75, 0.5, 0xffd7a8, 10);   // Çalışma Odası
+const poolLight = addInteriorLight(4.3, 0.5, 5.9, 0x38d9ff, 8); // Havuz Işığı
+
+function setLighting(mode) {
+  document.getElementById('btn-day').classList.remove('active');
+  document.getElementById('btn-sunset').classList.remove('active');
+  document.getElementById('btn-night').classList.remove('active');
+  document.getElementById('btn-' + mode).classList.add('active');
+
+  if (mode === 'day') {
+    scene.background.set(0x8ecae6);
+    scene.fog.color.set(0x8ecae6);
+    sunLight.color.set(0xfff8eb);
+    sunLight.intensity = 1.35;
+    sunLight.position.set(14, 22, 16);
+    hemiLight.intensity = 0.75;
+    interiorLights.forEach(l => l.intensity = 0.2);
+    poolLight.intensity = 0.1;
+    mats.emissiveWarm.emissiveIntensity = 0.4;
+  } else if (mode === 'sunset') {
+    scene.background.set(0xe69f73);
+    scene.fog.color.set(0xe69f73);
+    sunLight.color.set(0xffa95c);
+    sunLight.intensity = 1.15;
+    sunLight.position.set(18, 9, 20);
+    hemiLight.intensity = 0.55;
+    interiorLights.forEach(l => l.intensity = 0.75);
+    poolLight.intensity = 0.6;
+    mats.emissiveWarm.emissiveIntensity = 1.5;
+  } else {
+    scene.background.set(0x0b1221);
+    scene.fog.color.set(0x0b1221);
+    sunLight.color.set(0x6d8cc9);
+    sunLight.intensity = 0.22;
+    sunLight.position.set(-12, 18, -14);
+    hemiLight.intensity = 0.2;
+    interiorLights.forEach(l => l.intensity = 1.35);
+    poolLight.intensity = 1.4;
+    mats.emissiveWarm.emissiveIntensity = 2.4;
+  }
+}
+
+// ============================================================================
+// 10. KAMERA KONTROLLERİ (YÜRÜME MODU + KUŞBAKIŞI MODU + IŞINLANMA)
+// ============================================================================
+let cameraMode = 'walk'; // 'walk' | 'orbit'
+let collisionEnabled = true;
+let roofVisible = true;
+
+// Yürüme Modu Değişkenleri
+const player = {
+  pos: new THREE.Vector3(-2.5, 1.65, 11.5),
+  yaw: 0.25,
+  pitch: -0.05,
+  radius: 0.28
+};
+
+// Kuşbakışı (Orbit) Değişkenleri
+const orbit = {
+  target: new THREE.Vector3(0, 0.5, 1.0),
+  theta: 0.55,
+  phi: 0.85,
+  radius: 19
+};
+
+const keys = {};
+let isDragging = false;
+let prevMouse = { x: 0, y: 0 };
+
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'KeyM') setCameraMode(cameraMode === 'walk' ? 'orbit' : 'walk');
+  if (e.code === 'KeyT') toggleRoof();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+renderer.domElement.addEventListener('mousedown', e => {
+  isDragging = true;
+  prevMouse = { x: e.clientX, y: e.clientY };
+  if (cameraMode === 'walk' && document.pointerLockElement !== renderer.domElement) {
+    renderer.domElement.requestPointerLock?.();
+  }
+});
+
+window.addEventListener('mouseup', () => { isDragging = false; });
+
+window.addEventListener('mousemove', e => {
+  if (cameraMode === 'walk') {
+    if (document.pointerLockElement === renderer.domElement) {
+      player.yaw -= e.movementX * 0.0022;
+      player.pitch -= e.movementY * 0.0022;
+    } else if (isDragging) {
+      const dx = e.clientX - prevMouse.x;
+      const dy = e.clientY - prevMouse.y;
+      player.yaw -= dx * 0.004;
+      player.pitch -= dy * 0.004;
+      prevMouse = { x: e.clientX, y: e.clientY };
+    }
+    player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch));
+  } else if (cameraMode === 'orbit' && isDragging) {
+    const dx = e.clientX - prevMouse.x;
+    const dy = e.clientY - prevMouse.y;
+    orbit.theta -= dx * 0.007;
+    orbit.phi = Math.max(0.18, Math.min(1.45, orbit.phi - dy * 0.007));
+    prevMouse = { x: e.clientX, y: e.clientY };
+  }
+});
+
+window.addEventListener('wheel', e => {
+  if (cameraMode === 'orbit') {
+    orbit.radius = Math.max(7, Math.min(36, orbit.radius + e.deltaY * 0.015));
+  }
+}, { passive: true });
+
+function setCameraMode(mode) {
+  cameraMode = mode;
+  document.getElementById('btn-mode-walk').classList.toggle('active', mode === 'walk');
+  document.getElementById('btn-mode-orbit').classList.toggle('active', mode === 'orbit');
+  document.getElementById('crosshair').style.opacity = mode === 'walk' ? '1' : '0';
+
+  if (mode === 'orbit') {
+    if (document.pointerLockElement) document.exitPointerLock();
+    if (roofVisible) toggleRoof(false);
+    document.getElementById('room-badge').textContent = 'Konum: Kuşbakışı Mimari Plan';
+  } else {
+    if (!roofVisible) toggleRoof(true);
+    updateRoomLabel();
+  }
+}
+
+function toggleRoof(forceState) {
+  roofVisible = typeof forceState === 'boolean' ? forceState : !roofVisible;
+  roofGroup.visible = roofVisible;
+  document.getElementById('btn-roof').textContent = 'Çatı: ' + (roofVisible ? 'Açık' : 'Gizli');
+  document.getElementById('btn-roof').classList.toggle('active', !roofVisible);
+}
+
+function toggleCollision() {
+  collisionEnabled = !collisionEnabled;
+  document.getElementById('btn-noclip').textContent = 'Duvar Çarpışması: ' + (collisionEnabled ? 'Açık' : 'Kapalı');
+  document.getElementById('btn-noclip').classList.toggle('active', !collisionEnabled);
+}
+
+const viewpoints = {
+  exterior: { pos: [-2.5, 1.65, 11.5], yaw: 0.25, pitch: -0.05 },
+  entrance: { pos: [-1.4, 1.65, -3.2], yaw: Math.PI, pitch: -0.05 },
+  living:   { pos: [1.8, 1.65, 2.2], yaw: 1.35, pitch: -0.06 },
+  bedroom:  { pos: [-3.2, 1.65, 1.4], yaw: 1.55, pitch: -0.08 },
+  dressing: { pos: [-3.5, 1.65, -2.5], yaw: 1.55, pitch: -0.06 },
+  study:    { pos: [4.7, 1.65, 0.2], yaw: -0.35, pitch: -0.06 },
+  veranda:  { pos: [-1.5, 1.65, 5.6], yaw: -0.95, pitch: -0.06 }
+};
+
+function teleportTo(key) {
+  if (cameraMode !== 'walk') setCameraMode('walk');
+  const vp = viewpoints[key];
+  player.pos.set(vp.pos[0], vp.pos[1], vp.pos[2]);
+  player.yaw = vp.yaw;
+  player.pitch = vp.pitch;
+  updateRoomLabel();
+}
+
+function updateRoomLabel() {
+  if (cameraMode === 'orbit') return;
+  const x = player.pos.x, z = player.pos.z;
+  let name = 'Dış Cephe & Bahçe';
+  if (z >= -4.0 && z <= 4.0 && x >= -7.0 && x <= 7.0) {
+    if (x < -2.5) {
+      if (z > -1.2) name = 'Ana Yatak Odası';
+      else if (x < -4.3) name = 'Ebeveyn Banyosu';
+      else name = 'Giyinme Odası';
+    } else if (x <= 3.5) {
+      if (z < -1.5) {
+        if (x < -0.3) name = 'Giriş Holü & Vestiyer';
+        else if (x < 1.8) name = 'Kiler & Çamaşır Odası';
+        else name = 'Misafir WC';
+      } else if (z < 1.0) {
+        name = 'Açık Ada Mutfak';
+      } else {
+        name = 'Salon (Şömine & TV)';
+      }
+    } else {
+      name = 'Çalışma / Hobi & Misafir Odası';
+    }
+  } else if (z > 4.0 && z <= 7.3 && x >= -7.0 && x <= 7.0) {
+    name = 'Ahşap Deck Veranda & Havuz';
+  }
+  document.getElementById('room-badge').textContent = 'Konum: ' + name;
+}
+
+function checkCollision(nx, nz) {
+  if (!collisionEnabled) return false;
+  const r = player.radius;
+  for (let i = 0; i < wallColliders.length; i++) {
+    const c = wallColliders[i];
+    if (nx + r > c.minX && nx - r < c.maxX && nz + r > c.minZ && nz - r < c.maxZ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ============================================================================
+// 11. ANİMASYON DÖNGÜSÜ
+// ============================================================================
+let lastTime = performance.now();
+
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = Math.min((now - lastTime) / 1000, 0.08);
+  lastTime = now;
+
+  // Şömine & Havuz hafif canlılık efekti
+  mats.emissiveFire.emissiveIntensity = 1.9 + Math.sin(now * 0.012) * 0.35;
+  poolWater.position.y = 0.01 + Math.sin(now * 0.0025) * 0.006;
+
+  if (cameraMode === 'walk') {
+    const speed = (keys['ShiftLeft'] || keys['ShiftRight'] ? 6.2 : 3.4) * dt;
+    let moveF = 0, moveR = 0;
+    if (keys['KeyW'] || keys['ArrowUp']) moveF += 1;
+    if (keys['KeyS'] || keys['ArrowDown']) moveF -= 1;
+    if (keys['KeyD'] || keys['ArrowRight']) moveR += 1;
+    if (keys['KeyA'] || keys['ArrowLeft']) moveR -= 1;
+
+    if (moveF !== 0 || moveR !== 0) {
+      const len = Math.hypot(moveF, moveR);
+      moveF /= len; moveR /= len;
+
+      const sinY = Math.sin(player.yaw);
+      const cosY = Math.cos(player.yaw);
+      const dx = (-sinY * moveF + cosY * moveR) * speed;
+      const dz = (-cosY * moveF - sinY * moveR) * speed;
+
+      if (!checkCollision(player.pos.x + dx, player.pos.z)) player.pos.x += dx;
+      if (!checkCollision(player.pos.x, player.pos.z + dz)) player.pos.z += dz;
+
+      player.pos.x = Math.max(-35, Math.min(35, player.pos.x));
+      player.pos.z = Math.max(-35, Math.min(35, player.pos.z));
+      updateRoomLabel();
+    }
+
+    camera.position.copy(player.pos);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = player.yaw;
+    camera.rotation.x = player.pitch;
+  } else {
+    const ox = orbit.target.x + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta);
+    const oy = orbit.target.y + orbit.radius * Math.cos(orbit.phi);
+    const oz = orbit.target.z + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta);
+    camera.position.set(ox, oy, oz);
+    camera.lookAt(orbit.target);
+  }
+
+  renderer.render(scene, camera);
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+setLighting('sunset');
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
